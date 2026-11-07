@@ -225,7 +225,8 @@ for (let k = 0; k < 4; k++) {
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
 const objects = [
   { mesh: openCubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0, 0] },
-  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, local: translate(0, 0.75, 0), parent: 0 },
+  // Screen's front-most point is its center (local z = 0); put it 0.05 behind the open face at z = 1
+  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, local: translate(0, 0, 0.95), parent: 0 },
   ...stripLocals.map(local => ({ mesh: planeMesh, texture: brickTexture, mapping: BUMP_MAPPING, local, parent: 0 })),
   { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [3.0, 0, 0] }
 ];
