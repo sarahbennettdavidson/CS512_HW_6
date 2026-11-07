@@ -78,49 +78,48 @@ function createCylinder(segments = 64, uRepeat = 3) {
   };
 }
 
-function createTvScreen(widthRes, heightRes, convexityHeight) {
+function createTvScreen(widthRes, heightRes, screenWidth, screenHeight, curvatureRadius) {
   const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
+  
+  // Angular spread of the screen based on its physical size and curvature radius
+  const maxAngleX = screenWidth / curvatureRadius;
+  const maxAngleY = screenHeight / curvatureRadius;
 
-  for (let zIndex = 0; zIndex <= heightRes; zIndex++) {
+  for (let yIndex = 0; yIndex <= heightRes; yIndex++) {
     for (let xIndex = 0; xIndex <= widthRes; xIndex++) {
       const u = xIndex / widthRes;
-      const v = zIndex / heightRes;
-      const x = u * 2 - 1;
-      const z = v * 2 - 1;
+      const v = yIndex / heightRes;
 
-      const distSq = x * x + z * z;
-      const term = Math.max(0, 1 - distSq);
-      const y = Math.sqrt(term) * convexityHeight;
+      // Map UV to angles centered at 0
+      const theta = (u - 0.5) * maxAngleX; // horizontal angle
+      const phi = (v - 0.5) * maxAngleY;   // vertical angle
+
+      // Spherical patch equations (curves edge-to-edge with no flat margins)
+      const x = curvatureRadius * Math.sin(theta);
+      const y = curvatureRadius * Math.sin(phi);
+      const z = curvatureRadius * (Math.cos(theta) * Math.cos(phi) - 1);
 
       positions.push(x, y, z);
       texCoords.push(u, v);
 
-      // Analytically compute normals and tangents for lighting & bump mapping
-      let nx = 0, ny = 1, nz = 0;
-      let tx = 1, ty = 0, tz = 0;
-
-      if (y > 0.0001) {
-        const dhdx = (-x * convexityHeight) / Math.sqrt(term);
-        const dhdz = (-z * convexityHeight) / Math.sqrt(term);
-        const len = Math.sqrt(dhdx * dhdx + 1 + dhdz * dhdz);
-        nx = -dhdx / len;
-        ny = 1 / len;
-        nz = -dhdz / len;
-
-        const tLen = Math.sqrt(1 + dhdx * dhdx);
-        tx = 1 / tLen; 
-        ty = dhdx / tLen; 
-        tz = 0;
-      }
-
+      // Normals pointing outward from the curvature center
+      const nx = Math.sin(theta);
+      const ny = Math.sin(phi);
+      const nz = Math.cos(theta) * Math.cos(phi);
       normals.push(nx, ny, nz);
-      tangents.push(tx, ty, tz);
+
+      // Tangent vector along the U direction
+      const tx = Math.cos(theta);
+      const ty = 0;
+      const tz = -Math.sin(theta);
+      const tLen = Math.sqrt(tx * tx + tz * tz);
+      tangents.push(tx / tLen, ty / tLen, tz / tLen);
     }
   }
 
-  for (let zIndex = 0; zIndex < heightRes; zIndex++) {
+  for (let yIndex = 0; yIndex < heightRes; yIndex++) {
     for (let xIndex = 0; xIndex < widthRes; xIndex++) {
-      const a = zIndex * (widthRes + 1) + xIndex;
+      const a = yIndex * (widthRes + 1) + xIndex;
       const b = a + widthRes + 1;
       indices.push(a, a + 1, b,    b, a + 1, b + 1);
     }
