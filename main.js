@@ -191,7 +191,7 @@ const normalTexture = loadTexture("texture2.jpg");
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
 const objects = [
   { mesh: cubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0, 0] },
-  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0.75, 0] }, 
+  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [0, 0.75, 0], parent: 0 },
   { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [3.0, 0, 0] }
 ];
 
@@ -254,12 +254,13 @@ function render(time) {
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
 
   gl.activeTexture(gl.TEXTURE0);
-  for (const { mesh, texture, mapping, offset } of objects) {
-    gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(...offset), rotation)));
-    gl.uniform1i(uMapping, mapping);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.bindVertexArray(mesh.vao);
-    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+  const models = [];
+  for (const { mesh, texture, mapping, offset, parent } of objects) {
+    const model = parent === undefined
+      ? multiply(translate(...offset), rotation)          // top-level: translate * rotation
+      : multiply(models[parent], translate(...offset));   // child: parent's model * translation
+    models.push(model);
+    gl.uniformMatrix4fv(uModelView, false, multiply(view, model));
   }
   requestAnimationFrame(render);
 }
