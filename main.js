@@ -165,6 +165,8 @@ function createMesh({ positions, normals, tangents, texCoords, indices }) {
 
 const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder());
+// Create your TV screen mesh (e.g., 20x20 resolution, 0.5 height bulge)
+const tvScreenMesh = createMesh(maketvScreen(20, 20, 0.5));
 
 function loadTexture(url) {
   const texture = gl.createTexture();
@@ -188,8 +190,9 @@ const normalTexture = loadTexture("texture2.jpg");
 
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
 const objects = [
-  { mesh: cubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-1.8, 0, 0] },
-  { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [1.8, 0, 0] }
+  { mesh: cubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0, 0] },
+  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [0, 0, 0] }, // Middle: your convex TV screen with brick texture!
+  { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [3.0, 0, 0] }
 ];
 
 gl.enable(gl.DEPTH_TEST);
