@@ -166,7 +166,7 @@ function createMesh({ positions, normals, tangents, texCoords, indices }) {
 const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder());
 // Create your TV screen mesh (e.g., 20x20 resolution, 0.5 height bulge)
-const tvScreenMesh = createMesh(createTvScreen(40, 30, 0.1,3.0));
+const tvScreenMesh = createMesh(createTvScreen(30, 30, 2.0, 1.5, 3.0));
 
 function loadTexture(url) {
   const texture = gl.createTexture();
