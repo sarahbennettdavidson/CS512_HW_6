@@ -163,7 +163,17 @@ function createMesh({ positions, normals, tangents, texCoords, indices }) {
   return { vao, count: indices.length };
 }
 
-const cubeMesh = createMesh(createCube());
+function scaleMatrix(sx, sy, sz) {
+  return new Float32Array([
+    sx, 0,  0,  0,
+    0,  sy, 0,  0,
+    0,  0,  sz, 0,
+    0,  0,  0,  1
+  ]);
+}
+
+const openCubeMesh = createMesh(createOpenCube());
+const planeMesh = createMesh(createPlane());
 const cylinderMesh = createMesh(createCylinder());
 // Create your TV screen mesh (e.g., 20x20 resolution, 0.5 height bulge)
 const tvScreenMesh = createMesh(createTvScreen(30, 30, 2.0, 1.5, 3.0));
@@ -188,10 +198,35 @@ function loadTexture(url) {
 const brickTexture = loadTexture("brick.png");
 const normalTexture = loadTexture("texture2.jpg");
 
+// Border strips and inner walls, all built from the one unit plane.
+// The cube spans -1..1 and its open side is at z = +1.
+const BORDER = 0.2;          // width of the border strips
+const DEPTH = 0.5;           // how far the inner walls run back into the cube
+const INNER = 1 - BORDER;    // inner edge of the border
+
+const stripLocals = [];
+for (let k = 0; k < 4; k++) {
+  const side = rotateZ(k * Math.PI / 2);   // k = 0 top, 1 left, 2 bottom, 3 right
+
+  // Border strip: scale to (2 - BORDER) x BORDER, move to the top edge at z = 1.
+  // Shifted by -BORDER/2 in x so the four strips tile the corners without overlapping.
+  stripLocals.push(multiply(side,
+    multiply(translate(-BORDER / 2, 1 - BORDER / 2, 1),
+      scaleMatrix(2 - BORDER, BORDER, 1))));
+
+  // Inner wall: scale to (2 * INNER) x DEPTH, rotate 90 degrees about x so it stands
+  // perpendicular to the border facing -y, then move it to the border's inner edge,
+  // running from z = 1 back to z = 1 - DEPTH.
+  stripLocals.push(multiply(side,
+    multiply(translate(0, INNER, 1 - DEPTH / 2),
+      multiply(rotateX(Math.PI / 2), scaleMatrix(2 * INNER, DEPTH, 1)))));
+}
+
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
 const objects = [
-  { mesh: cubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0, 0] },
-  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [0, 0.75, 0], parent: 0 },
+  { mesh: openCubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0, 0] },
+  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, local: translate(0, 0.75, 0), parent: 0 },
+  ...stripLocals.map(local => ({ mesh: planeMesh, texture: brickTexture, mapping: BUMP_MAPPING, local, parent: 0 })),
   { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [3.0, 0, 0] }
 ];
 
@@ -255,10 +290,10 @@ function render(time) {
 
   gl.activeTexture(gl.TEXTURE0);
   const models = [];
-  for (const { mesh, texture, mapping, offset, parent } of objects) {
+  for (const { mesh, texture, mapping, offset, local, parent } of objects) {
     const model = parent === undefined
-      ? multiply(translate(...offset), rotation)          // top-level: translate * rotation
-      : multiply(models[parent], translate(...offset));   // child: parent's model * translation
+      ? multiply(translate(...offset), rotation)   // top-level: translate * rotation
+      : multiply(models[parent], local);           // child: parent's model * local transform
     models.push(model);
     gl.uniformMatrix4fv(uModelView, false, multiply(view, model));
     gl.uniform1i(uMapping, mapping);
