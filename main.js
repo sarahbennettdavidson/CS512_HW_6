@@ -191,7 +191,7 @@ const normalTexture = loadTexture("texture2.jpg");
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
 const objects = [
   { mesh: cubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0, 0] },
-  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [0, 0, 0] }, // Middle: your convex TV screen with brick texture!
+  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0.75, 0] }, 
   { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [3.0, 0, 0] }
 ];
 
