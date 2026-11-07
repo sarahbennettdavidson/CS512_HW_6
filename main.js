@@ -37,7 +37,7 @@ in vec2 vTexCoord;
 
 uniform vec3 uLightPos;
 uniform sampler2D uTexture;
-uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping
+uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = video (unlit)
 
 out vec4 fragColor;
 
@@ -51,6 +51,12 @@ float height(vec2 uv) {
 }
 
 void main() {
+  // Video: the screen gives off its own light, so show the frame as is with no shading
+  if (uMapping == 2) {
+    fragColor = vec4(texture(uTexture, vTexCoord).rgb, 1.0);
+    return;
+  }
+
   // Tangent frame (T, B, N)
   vec3 N = normalize(vNormal);
   vec3 T = normalize(vTangent - dot(vTangent, N) * N);
@@ -198,6 +204,34 @@ function loadTexture(url) {
 const brickTexture = loadTexture("brick.png");
 const normalTexture = loadTexture("texture2.jpg");
 
+function loadVideoTexture(url) {
+  const video = document.createElement("video");
+  video.src = url;
+  video.muted = true;        // browsers only autoplay muted video
+  video.loop = true;
+  video.playsInline = true;
+  video.play().catch(() => document.addEventListener("click", () => video.play(), { once: true }));
+
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+  // No mipmaps: they would have to be rebuilt every frame
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return { texture, video };
+}
+
+// Copy the video's current frame into its texture; called once per render
+function updateVideoTexture({ texture, video }) {
+  if (video.readyState < video.HAVE_CURRENT_DATA) return;
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+}
+
+const tvVideo = loadVideoTexture("video.mp4");
+
 // Border strips and inner walls, all built from the one unit plane.
 // The cube spans -1..1 and its open side is at z = +1.
 const BORDER = 0.2;          // width of the border strips
@@ -222,11 +256,11 @@ for (let k = 0; k < 4; k++) {
       multiply(rotateX(Math.PI / 2), scaleMatrix(2 * INNER, DEPTH, 1)))));
 }
 
-const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
+const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, VIDEO = 2;
 const objects = [
   { mesh: openCubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0, 0] },
   // Screen's front-most point is its center (local z = 0); put it 0.05 behind the open face at z = 1
-  { mesh: tvScreenMesh, texture: brickTexture, mapping: BUMP_MAPPING, local: translate(0, 0, 0.95), parent: 0 },
+  { mesh: tvScreenMesh, texture: tvVideo.texture, mapping: VIDEO, local: translate(0, 0, 0.95), parent: 0 },
   ...stripLocals.map(local => ({ mesh: planeMesh, texture: brickTexture, mapping: BUMP_MAPPING, local, parent: 0 })),
   { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [3.0, 0, 0] }
 ];
@@ -290,6 +324,7 @@ function render(time) {
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
 
   gl.activeTexture(gl.TEXTURE0);
+  updateVideoTexture(tvVideo);
   const models = [];
   for (const { mesh, texture, mapping, offset, local, parent } of objects) {
     const model = parent === undefined
