@@ -77,3 +77,40 @@ function createCylinder(segments = 64, uRepeat = 3) {
     indices: new Uint16Array(indices)
   };
 }
+
+function maketvScreen(widthRes, heightRes, convexityHeight) {
+  const pos = [], col = [], uv = [], idx = [];
+
+  for (let zIndex = 0; zIndex <= heightRes; zIndex++) {
+    for (let xIndex = 0; xIndex <= widthRes; xIndex++) {
+      // 1. Map grid coordinates to a normalized range from -1 to 1
+      const u = xIndex / widthRes;
+      const v = zIndex / heightRes;
+      const x = u * 2 - 1;
+      const z = v * 2 - 1;
+
+      // 2. Compute convexity based on distance from the center (0,0)
+      const distSq = x * x + z * z; // squared distance from center
+      
+      const y = Math.max(0, Math.sqrt(Math.max(0, 1 - distSq))) * convexityHeight;
+      pos.push(x, y, z);
+      
+      // Color based on position and height
+      col.push((x + 1) / 2, y / convexityHeight, (z + 1) / 2);
+      uv.push(u, v);
+    }
+  }
+
+  // 3. Generate indices for the quad grid
+  for (let zIndex = 0; zIndex < heightRes; zIndex++) {
+    for (let xIndex = 0; xIndex < widthRes; xIndex++) {
+      const a = zIndex * (widthRes + 1) + xIndex;     // current vertex
+      const b = a + widthRes + 1;                     // vertex on the row below
+      
+      // Two triangles per grid cell
+      idx.push(a, a + 1, b,    b, a + 1, b + 1);
+    }
+  }
+
+  return { pos, col, uv, idx };
+}
