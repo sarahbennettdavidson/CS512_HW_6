@@ -261,6 +261,10 @@ function render(time) {
       : multiply(models[parent], translate(...offset));   // child: parent's model * translation
     models.push(model);
     gl.uniformMatrix4fv(uModelView, false, multiply(view, model));
+    gl.uniform1i(uMapping, mapping);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.bindVertexArray(mesh.vao);
+    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
   }
   requestAnimationFrame(render);
 }
