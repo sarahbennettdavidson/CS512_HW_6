@@ -1,76 +1,58 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Texture Mapping</title>
+  <title>TV Wall</title>
   <style>
-    body { background: #111; color: #ccc; font-family: monospace; }
-    canvas { border: 1px solid #444; }
-    .layout { display: flex; gap: 10px; align-items: flex-start; }
-    .editors { display: flex; flex-direction: column; gap: 10px; }
-    textarea {
-      background: #222;
-      color: #0f0;
-      font: 14px monospace;
-      width: 400px;
-      height: 200px;
-      box-sizing: border-box;
-      white-space: pre;
-    }
-    #shaderError { color: #f66; white-space: pre-wrap; width: 400px; margin: 0; }
-    .controls { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
-    .control-row { display: flex; align-items: center; gap: 10px; }
+    body { margin: 0; background: #111; color: #ddd; font-family: system-ui, sans-serif; font-size: 14px; }
+    #glcanvas { display: block; margin: 12px auto; background: #000; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: center; align-items: center; margin: 8px; }
+    .hint { text-align: center; color: #888; margin: 4px; }
+    #shaderError { color: #f66; white-space: pre-wrap; margin: 8px; }
+    .editors { display: flex; gap: 8px; margin: 8px; }
+    .editors textarea { flex: 1; height: 320px; font-family: monospace; font-size: 12px; background: #1b1b1b; color: #ddd; }
   </style>
 </head>
-
 <body>
-  <h2>HW 6 Texture Mapping</h2>
+  <canvas id="glcanvas" width="1200" height="800"></canvas>
+  <p class="hint">Drag to orbit. Arrow keys move the camera, W and S move it in and out.</p>
 
-  <p>Edit the shaders on the left; the canvas updates as you type.<br>
-    Drag with the mouse to rotate the models.<br>
-    Use the arrow keys and w, s keys to move the camera.<br>
-    Use the slider and dropdown to rotate about an axis; the button starts/stops spinning.</p>
+  <!-- Screens and sound -->
+  <div class="controls">
+    <button id="channelButton">Ch 1</button>
+    <button id="screensButton">Screens: spread</button>
+    <button id="soundButton">Sound on</button>
+    <button id="materialButton">Material: brick</button>
+  </div>
 
-  <div class="layout">
-    <div class="editors">
-      <div>
-        <b>Vertex Shader</b><br>
-        <textarea id="vertEditor" spellcheck="false"></textarea>
-      </div>
-      <div>
-        <b>Fragment Shader</b><br>
-        <textarea id="fragEditor" spellcheck="false"></textarea>
-      </div>
-      <pre id="shaderError"></pre>
-    </div>
+  <!-- Rotation -->
+  <div class="controls">
+    <label>Axis
+      <select id="axisSelect">
+        <option value="x">X</option>
+        <option value="y">Y</option>
+        <option value="z">Z</option>
+      </select>
+    </label>
+    <label>Angle <input id="slider" type="range" min="0" max="360" value="0"> <span id="sliderValue">0</span>°</label>
+    <button id="spinButton">Start/Stop</button>
+  </div>
 
-    <div>
-      <canvas id="glcanvas" width="640" height="400"></canvas>
+  <!-- Trying material maps from your computer -->
+  <div class="controls">
+    <label>Material folder <input type="file" id="materialInput" webkitdirectory></label>
+    <label>Material images <input type="file" id="brickInput" accept="image/*" multiple></label>
+  </div>
 
-      <div class="controls">
-        <div class="control-row">
-          <label for="slider">Rotation Angle:</label>
-          <input type="range" id="slider" min="0" max="360" value="0">
-          <span id="sliderValue">0</span>
-        </div>
-        <div class="control-row">
-          <select id="axisSelect">
-            <option value="x">X Rotation</option>
-            <option value="y">Y Rotation</option>
-            <option value="z">Z Rotation</option>
-          </select>
-          <button id="spinButton">Start/Stop Rotation</button>
-        </div>
-        <button id="soundButton">Sound on</button>
-      </div>
-      <button id="materialButton">Material: brick</button>
-    </div>
+  <!-- Live shader editors -->
+  <pre id="shaderError"></pre>
+  <div class="editors">
+    <textarea id="vertEditor" spellcheck="false"></textarea>
+    <textarea id="fragEditor" spellcheck="false"></textarea>
   </div>
 
   <script src="transforms.js"></script>
   <script src="models.js"></script>
   <script src="main.js"></script>
 </body>
-
 </html>
