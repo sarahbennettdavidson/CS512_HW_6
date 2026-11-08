@@ -50,6 +50,22 @@
 
       <div class="controls">
         <div class="control-row">
+          <button id="channelButton">Ch 1</button>
+          <button id="screensButton">Screens: spread</button>
+          <button id="soundButton">Sound on</button>
+        </div>
+        <div class="control-row">
+          <button id="materialButton">Material: plastic</button>
+        </div>
+        <div class="control-row">
+          <select id="shuffleAxis">
+            <option value="x">Shuffle X</option>
+            <option value="y">Shuffle Y</option>
+            <option value="z">Shuffle Z</option>
+          </select>
+          <button id="shuffleButton">Shuffle X: off</button>
+        </div>
+        <div class="control-row">
           <label for="slider">Rotation Angle:</label>
           <input type="range" id="slider" min="0" max="360" value="0">
           <span id="sliderValue">0</span>
@@ -61,14 +77,6 @@
             <option value="z">Z Rotation</option>
           </select>
           <button id="spinButton">Start/Stop Rotation</button>
-        </div>
-        <div class="control-row">
-          <button id="channelButton">Ch 1</button>
-          <button id="screensButton">Screens: spread</button>
-          <button id="soundButton">Sound on</button>
-        </div>
-        <div class="control-row">
-          <button id="materialButton">Material: brick</button>
         </div>
       </div>
     </div>
