@@ -299,6 +299,17 @@ function updateVideoTexture({ texture, video }) {
 
 const tvVideo = loadVideoTexture("video.mp4");   // shared by every TV
 
+// Sound toggle: <button id="soundButton">Sound on</button> in index.html.
+// The video starts muted because browsers only autoplay muted video, and they only let
+// a page unmute in response to a click, which is why this is a button.
+const soundButton = document.getElementById("soundButton");
+soundButton?.addEventListener("click", () => {
+  const video = tvVideo.video;
+  video.muted = !video.muted;
+  if (!video.muted) video.play();   // in case autoplay was blocked
+  soundButton.textContent = video.muted ? "Sound on" : "Sound off";
+});
+
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, VIDEO = 2, TRIPLANAR = 3;
 const IDENTITY = translate(0, 0, 0);
 
