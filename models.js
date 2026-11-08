@@ -171,3 +171,42 @@ function createPlane() {
   const indices = new Uint16Array([0, 1, 2,  0, 2, 3]);
   return { positions, normals, tangents, texCoords, indices };
 }
+
+function makeSphere(latRes, lonRes) {
+  const pos = [], col = [], uv = [], idx = [];
+  for (let lat = 0; lat <= latRes; lat++) {
+    const latAngle = lat * Math.PI / latRes;          // 0 at top, PI at bottom
+    const sinT = Math.sin(latAngle), cosT = Math.cos(latAngle);
+    for (let lon = 0; lon <= lonRes; lon++) {
+      const lonAngle = lon * 2 * Math.PI / lonRes;    // around the ring
+      const x = sinT * Math.cos(lonAngle);
+      const y = cosT;
+      const z = sinT * Math.sin(lonAngle);
+      pos.push(x, y, z);
+      col.push((x + 1) / 2, (y + 1) / 2, (z + 1) / 2);
+      uv.push(lon / lonRes, 1 - lat / latRes);
+    }
+  }
+
+  for (let lat = 0; lat < latRes; lat++) {
+    for (let lon = 0; lon < lonRes; lon++) {
+      const a = lat * (lonRes + 1) + lon;  // current ring
+      const b = a + lonRes + 1;            // next ring down
+      idx.push(a, a + 1, b,   b, a + 1, b + 1);
+    }
+  }
+
+  return {
+    sphPositions: new Float32Array(pos),
+    sphColors: new Float32Array(col),
+    sphUVs: new Float32Array(uv),
+    sphIndices: new Uint16Array(idx)
+  };
+}
+
+const sphere = makeSphere(32, 32);
+const spherePos = sphere.sphPositions;
+const sphereColors = sphere.sphColors;
+const sphereIndices = sphere.sphIndices;
+const sphereUVs = sphere.sphUVs;
+}
