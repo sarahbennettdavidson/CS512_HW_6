@@ -360,7 +360,7 @@ function createMaterial(maps = {}) {
   };
 }
 
-// The starting material: the brick image, with bumps from its darkness
+// The brick image, with bumps from its darkness; last in the Material button's list
 const brickMaterial = createMaterial({ color: loadTexture("brick.png", { placeholder: [128, 128, 128, 255] }) });
 
 // Load a texture that might not exist. Resolves to the texture, or to null if the file is missing.
@@ -434,6 +434,7 @@ function loadPresetMaterial(preset) {
 
 // All the folders load at the start, so switching is instant
 const presetMaterials = MATERIAL_PRESETS.map(preset => ({ name: preset.name, material: loadPresetMaterial(preset) }));
+presetMaterials.push({ name: "brick", material: brickMaterial });
 const orangeMaterial = presetMaterials.find(p => p.name === "orange").material;
 const furMaterial = presetMaterials.find(p => p.name === "fur").material;
 
@@ -520,10 +521,11 @@ function setMaterial(m) {
   for (const tv of tvs) tv.material = m;
 }
 
-// Material button: <button id="materialButton">Material: brick</button> in index.html.
-// The TVs start on brick; each click moves to the next material, wrapping around.
-let presetIndex = -1;
+// Material button: <button id="materialButton"></button> in index.html.
+// The TVs start on the first material (plastic); each click moves to the next, wrapping around.
+let presetIndex = 0;
 const materialButton = document.getElementById("materialButton");
+if (materialButton) materialButton.textContent = `Material: ${presetMaterials[0].name}`;
 materialButton?.addEventListener("click", () => {
   presetIndex = (presetIndex + 1) % presetMaterials.length;
   setMaterial(presetMaterials[presetIndex].material);
@@ -836,7 +838,7 @@ class TV {
     this.aspect = aspect;
     this.border = border;            // width of the border strips, relative to size
     this.depth = depth;              // how far the inner walls run back, relative to size
-    this.material = brickMaterial;   // body material; reassign at any time
+    this.material = presetMaterials[0].material;   // body material (starts on plastic); reassign at any time
     this.turn = 0;                   // turn about its vertical axis, in radians (set by stackTVs)
     this.videoCrop = [0, 0, 1, 1];   // part of the picture shown on the screen: u0, v0, u1, v1 (set each frame in render)
     this.build();
@@ -845,11 +847,33 @@ class TV {
   // Work out every part; call again after changing size, aspect, border or depth
   build() {
     const b = this.border * this.size;     // border width
-    const d = this.depth * this.size;      // inner wall depth
     const iy = this.size - b;              // opening half-height
     const ix = iy * this.aspect;           // opening half-width
     const hx = ix + b, hy = this.size, hz = this.size;   // box half-extents
     this.half = [hx, hy, hz];
+
+    // Screen: a little larger than the opening so its edges tuck behind the inner walls.
+    // createTvScreen takes arc lengths; asin turns the half-widths we want into them.
+    const margin = 0.05 * this.size;
+    const sx = ix + margin, sy = iy + margin;     // screen half-extents (straight across)
+    const R = 1.25 * Math.max(hx, hy);            // curvature radius grows with the TV; smaller curves more
+    this.screenHalf = [sx, sy];
+    this.screenMesh = createMesh(createTvScreen(30, 30, 2 * R * Math.asin(sx / R), 2 * R * Math.asin(sy / R), R));
+
+    // How far the screen curves back from its center at a point (x, y) on it
+    const sagAt = (x, y) => R * (1 - Math.cos(Math.asin(x / R)) * Math.cos(Math.asin(y / R)));
+
+    // Bring the screen forward, so its center bulges out past the front of the frame. It can only
+    // come forward until the edge of the opening (where it curves back least: the middle of the
+    // top and bottom edges) is still just behind the frame, or it would poke through the border.
+    const edgeSag = Math.min(sagAt(0, iy), sagAt(ix, 0));
+    const forward = Math.min(0.15 * this.size, edgeSag - 0.02 * this.size);
+    this.screenLocal = translate(0, 0, hz + forward);   // the screen's center (local z = 0) is its front-most point
+
+    // How far behind the front the screen's corners end up; the inner walls have to reach at
+    // least that far (plus a little), or you'd see past their ends at the corners
+    const cornerDepth = sagAt(sx, sy) - forward;
+    const d = Math.max(this.depth * this.size, cornerDepth + 0.05 * this.size);   // inner wall depth
 
     // Body: the -1..1 open cube scaled to the box
     this.parts = [{ mesh: openCubeMesh, local: scaleMatrix(hx, hy, hz) }];
@@ -875,16 +899,8 @@ class TV {
         multiply(translate(0, innerReach, hz - d / 2),
           multiply(rotateX(Math.PI / 2), scaleMatrix(2 * innerAlong, d, 1)))) });
     }
-
-    // Screen: a little larger than the opening so its edges tuck behind the inner walls.
-    // createTvScreen takes arc lengths; asin turns the half-widths we want into them.
-    const margin = 0.05 * this.size;
-    const sx = ix + margin, sy = iy + margin;     // screen half-extents (straight across)
-    const R = 2.5 * Math.max(hx, hy);             // curvature radius grows with the TV; smaller curves more
-    this.screenHalf = [sx, sy];
-    this.screenMesh = createMesh(createTvScreen(30, 30, 2 * R * Math.asin(sx / R), 2 * R * Math.asin(sy / R), R));
-    // Screen's front-most point is its center (local z = 0); put it just behind the opening
-    this.screenLocal = translate(0, 0, hz - margin);
+    this.wallDepth = d;
+    this.screenForward = forward;
   }
 
   draw(view, screenTexture) {
