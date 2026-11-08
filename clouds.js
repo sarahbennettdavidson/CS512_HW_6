@@ -4,7 +4,8 @@
 // Shadertoy shaders are licensed CC BY-NC-SA 3.0 unless the author says otherwise:
 // https://creativecommons.org/licenses/by-nc-sa/3.0/
 // Changes: wrapped for WebGL2 (version and precision lines, the iResolution and iTime uniforms
-// Shadertoy normally provides, and a main() that calls mainImage). The cloud code is unchanged.
+// Shadertoy normally provides, and a main() that calls mainImage), and the two sky colours get a
+// small random tint on each page load.
 
 const CLOUDS_VERTEX_SHADER = `#version 300 es
 in vec3 aPosition;
@@ -13,6 +14,11 @@ void main() {
   gl_Position = vec4(aPosition.xy * 2.0, 0.0, 1.0);
 }
 `;
+
+// GLSL has no Math.random, so the random sky tint is worked out here in JavaScript and written
+// into the shader text with \${...}. toFixed(3) always gives a decimal point (e.g. 0.247),
+// which GLSL needs for a float.
+const skyTint = base => (base + Math.random() * 0.1).toFixed(3);
 
 const CLOUDS_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
@@ -27,8 +33,8 @@ const float cloudlight = 0.3;
 const float cloudcover = 0.2;
 const float cloudalpha = 8.0;
 const float skytint = 0.5;
-const vec3 skycolour1 = vec3(0.2+(Math.random()*0.1), 0.4+(Math.random()*0.1), 0.6+(Math.random()*0.1));//adding some tint to ssky
-const vec3 skycolour2 = vec3(0.4+(Math.random()*0.1), 0.7+(Math.random()*0.1), 1.0);
+const vec3 skycolour1 = vec3(${skyTint(0.2)}, ${skyTint(0.4)}, ${skyTint(0.6)});   // random tint, picked in JavaScript on each page load
+const vec3 skycolour2 = vec3(${skyTint(0.4)}, ${skyTint(0.7)}, 1.0);
 
 const mat2 m = mat2( 1.6,  1.2, -1.2,  1.6 );
 
