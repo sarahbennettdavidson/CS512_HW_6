@@ -275,6 +275,20 @@ const openCubeMesh = createMesh(createOpenCube());
 const planeMesh = createMesh(createPlane());
 const cylinderMesh = createMesh(createCylinder());
 
+// makeSphere (models.js) gives positions, colors, UVs and indices. createMesh also needs normals
+// and tangents: on a unit sphere the normal is the position itself, and the tangent points
+// around the ring, the direction u grows in.
+function sphereMeshData(latRes, lonRes) {
+  const { sphPositions, sphUVs, sphIndices } = makeSphere(latRes, lonRes);
+  const tangents = new Float32Array(sphPositions.length);
+  for (let i = 0; i < sphUVs.length / 2; i++) {
+    const lonAngle = sphUVs[2 * i] * 2 * Math.PI;
+    tangents.set([-Math.sin(lonAngle), 0, Math.cos(lonAngle)], 3 * i);
+  }
+  return { positions: sphPositions, normals: sphPositions, tangents, texCoords: sphUVs, indices: sphIndices };
+}
+const sphereMesh = createMesh(sphereMeshData(64, 64));
+
 // Upload an image into an existing texture. Set data for maps that hold numbers rather than
 // colors (normal and height maps), so the browser doesn't color-correct them. onLoad and
 // onError are optional callbacks.
@@ -395,6 +409,7 @@ function loadPresetMaterial(preset) {
 
 // All the folders load at the start, so switching is instant
 const presetMaterials = MATERIAL_PRESETS.map(preset => ({ name: preset.name, material: loadPresetMaterial(preset) }));
+const orangeMaterial = presetMaterials.find(p => p.name === "orange").material;
 
 function setMaterial(m) {
   for (const tv of tvs) tv.material = m;
@@ -744,6 +759,13 @@ function render(time) {
 
   layoutVideoWall(tvs, tvVideo.video);   // cheap; redone each frame so it follows the video size and TV positions
   for (const tv of tvs) tv.draw(view);
+
+  // Big orange sphere behind the TVs. It uses the same triplanar mapping as the TVs, with the
+  // radius in its local matrix, so the peel's dimples come out the same size as on a TV.
+  const SPHERE_CENTER = [0, 0, -9], SPHERE_RADIUS = 6;
+  gl.uniformMatrix4fv(uParentView, false, multiply(view, translate(...SPHERE_CENTER)));
+  bindMaterial(orangeMaterial);
+  drawMesh(sphereMesh, TRIPLANAR, scaleMatrix(SPHERE_RADIUS, SPHERE_RADIUS, SPHERE_RADIUS));
 
   // Cylinder
   gl.uniformMatrix4fv(uParentView, false, multiply(view, translate(4.5, 0, 0)));   // beside the stack
