@@ -47,6 +47,7 @@ uniform vec3 uLightPos;
 uniform sampler2D uTexture;
 uniform highp mat4 uParentView;  // highp to match the vertex shader, or the program won't link
 uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = video (unlit), 3 = triplanar bump mapping
+uniform vec4 uVideoCrop;  // part of the video frame shown on a screen: (u0, v0, u1, v1)
 
 out vec4 fragColor;
 
@@ -71,7 +72,8 @@ vec2 heightSlope(vec2 uv) {
 void main() {
   // Video: the screen gives off its own light, so show the frame as is with no shading
   if (uMapping == 2) {
-    fragColor = vec4(texture(uTexture, vTexCoord).rgb, 1.0);
+    vec2 uv = mix(uVideoCrop.xy, uVideoCrop.zw, vTexCoord);
+    fragColor = vec4(texture(uTexture, uv).rgb, 1.0);
     return;
   }
 
@@ -181,7 +183,7 @@ const shaderError = document.getElementById("shaderError");
 vertEditor.value = VERTEX_SHADER;
 fragEditor.value = FRAGMENT_SHADER;
 
-let program, uParentView, uLocal, uProjection, uLightPos, uMapping;
+let program, uParentView, uLocal, uProjection, uLightPos, uMapping, uVideoCrop;
 
 function updateProgram() {
   try {
@@ -194,6 +196,7 @@ function updateProgram() {
     uProjection = gl.getUniformLocation(program, "uProjection");
     uLightPos = gl.getUniformLocation(program, "uLightPos");
     uMapping = gl.getUniformLocation(program, "uMapping");
+    uVideoCrop = gl.getUniformLocation(program, "uVideoCrop");
     gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
     shaderError.textContent = "";
   } catch (e) {
@@ -238,11 +241,9 @@ const cylinderMesh = createMesh(createCylinder());
 // Create your TV screen mesh (e.g., 20x20 resolution, 0.5 height bulge)
 const tvScreenMesh = createMesh(createTvScreen(30, 30, 2.0, 1.5, 3.0));
 
-function loadTexture(url) {
-  const texture = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
-
+// Upload an image into an existing texture. Reusing the same texture object means
+// everything that draws with it picks up the new image without changing any references.
+function setTextureImage(texture, url) {
   const image = new Image();
   image.onload = () => {
     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -250,13 +251,27 @@ function loadTexture(url) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    if (url.startsWith("blob:")) URL.revokeObjectURL(url);
   };
   image.src = url;
+}
+
+function loadTexture(url) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
+  setTextureImage(texture, url);
   return texture;
 }
 
 const brickTexture = loadTexture("brick.png");
 const normalTexture = loadTexture("texture2.jpg");
+
+// Brick texture picker: <input type="file" id="brickInput" accept="image/*"> in index.html
+document.getElementById("brickInput")?.addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (file) setTextureImage(brickTexture, URL.createObjectURL(file));
+});
 
 function loadVideoTexture(url) {
   const video = document.createElement("video");
@@ -284,41 +299,77 @@ function updateVideoTexture({ texture, video }) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
 }
 
-const tvVideo = loadVideoTexture("video.mp4");
-
-// Border strips and inner walls, all built from the one unit plane.
-// The cube spans -1..1 and its open side is at z = +1.
-const BORDER = 0.2;          // width of the border strips
-const DEPTH = 0.5;           // how far the inner walls run back into the cube
-const INNER = 1 - BORDER;    // inner edge of the border
-
-const stripLocals = [];
-for (let k = 0; k < 4; k++) {
-  const side = rotateZ(k * Math.PI / 2);   // k = 0 top, 1 left, 2 bottom, 3 right
-
-  // Border strip: scale to (2 - BORDER) x BORDER, move to the top edge at z = 1.
-  // Shifted by -BORDER/2 in x so the four strips tile the corners without overlapping.
-  stripLocals.push(multiply(side,
-    multiply(translate(-BORDER / 2, 1 - BORDER / 2, 1),
-      scaleMatrix(2 - BORDER, BORDER, 1))));
-
-  // Inner wall: scale to (2 * INNER) x DEPTH, rotate 90 degrees about x so it stands
-  // perpendicular to the border facing -y, then move it to the border's inner edge,
-  // running from z = 1 back to z = 1 - DEPTH.
-  stripLocals.push(multiply(side,
-    multiply(translate(0, INNER, 1 - DEPTH / 2),
-      multiply(rotateX(Math.PI / 2), scaleMatrix(2 * INNER, DEPTH, 1)))));
-}
+const tvVideo = loadVideoTexture("video.mp4");   // shared by every TV
 
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, VIDEO = 2, TRIPLANAR = 3;
 const IDENTITY = translate(0, 0, 0);
-const objects = [
-  { mesh: openCubeMesh, texture: brickTexture, mapping: TRIPLANAR, offset: [-3.0, 0, 0] },
-  // Screen's front-most point is its center (local z = 0); put it 0.05 behind the open face at z = 1
-  { mesh: tvScreenMesh, texture: tvVideo.texture, mapping: VIDEO, local: translate(0, 0, 0.95), parent: 0 },
-  ...stripLocals.map(local => ({ mesh: planeMesh, texture: brickTexture, mapping: TRIPLANAR, local, parent: 0 })),
-  { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [3.0, 0, 0] }
-];
+
+// Draw one mesh. uParentView (the space it sits in) and the texture are set by the caller.
+function drawMesh(mesh, mapping, local) {
+  gl.uniformMatrix4fv(uLocal, false, local);
+  gl.uniform1i(uMapping, mapping);
+  gl.bindVertexArray(mesh.vao);
+  gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+}
+
+// A TV: an open brick box with a border around the opening, inner walls running back
+// from the border, and a curved video screen just behind the opening.
+//
+// The TV's own space is translate(position) * rotation. The size is built into each
+// part's local matrix rather than into that space, so triplanar mapping measures in
+// real units and the bricks stay the same size on TVs of any size.
+class TV {
+  constructor({ position = [0, 0, 0], size = 1, border = 0.2, depth = 0.5 } = {}) {
+    this.position = position;
+    this.size = size;
+    this.border = border;            // width of the border strips (before size)
+    this.depth = depth;              // how far the inner walls run back (before size)
+    this.texture = brickTexture;     // body texture; reassign at any time
+    this.videoCrop = [0, 0, 1, 1];   // part of the video frame shown: u0, v0, u1, v1
+    this.build();
+  }
+
+  // Work out every part's local matrix; call again after changing size, border or depth
+  build() {
+    const S = scaleMatrix(this.size, this.size, this.size);
+    const inner = 1 - this.border;   // inner edge of the border
+    this.parts = [{ mesh: openCubeMesh, local: S }];
+
+    for (let k = 0; k < 4; k++) {
+      const side = multiply(S, rotateZ(k * Math.PI / 2));   // k = 0 top, 1 left, 2 bottom, 3 right
+
+      // Border strip: scale to (2 - border) x border, move to the top edge at z = 1.
+      // Shifted by -border/2 in x so the four strips tile the corners without overlapping.
+      this.parts.push({ mesh: planeMesh, local: multiply(side,
+        multiply(translate(-this.border / 2, 1 - this.border / 2, 1),
+          scaleMatrix(2 - this.border, this.border, 1))) });
+
+      // Inner wall: scale to (2 * inner) x depth, rotate 90 degrees about x so it stands
+      // perpendicular to the border facing -y, then move it to the border's inner edge,
+      // running from z = 1 back to z = 1 - depth.
+      this.parts.push({ mesh: planeMesh, local: multiply(side,
+        multiply(translate(0, inner, 1 - this.depth / 2),
+          multiply(rotateX(Math.PI / 2), scaleMatrix(2 * inner, this.depth, 1)))) });
+    }
+
+    // Screen's front-most point is its center (local z = 0); put it 0.05 behind the open face at z = 1
+    this.screenLocal = multiply(S, translate(0, 0, 0.95));
+  }
+
+  draw(view, rotation) {
+    const space = multiply(translate(...this.position), rotation);
+    gl.uniformMatrix4fv(uParentView, false, multiply(view, space));
+
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    for (const { mesh, local } of this.parts) drawMesh(mesh, TRIPLANAR, local);
+
+    gl.bindTexture(gl.TEXTURE_2D, tvVideo.texture);
+    gl.uniform4fv(uVideoCrop, this.videoCrop);
+    drawMesh(tvScreenMesh, VIDEO, this.screenLocal);
+  }
+}
+
+const tvs = [new TV({ position: [0, 0, 0] })];
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
@@ -380,21 +431,13 @@ function render(time) {
 
   gl.activeTexture(gl.TEXTURE0);
   updateVideoTexture(tvVideo);
-  const models = [];
-  for (const { mesh, texture, mapping, offset, local, parent } of objects) {
-    // space: the matrix of the space the object sits in, which triplanar textures stay fixed to.
-    //   top-level object: its own model (translate * rotation), with an identity local
-    //   child: its parent's model, with its own local transform inside the parent
-    const space = parent === undefined ? multiply(translate(...offset), rotation) : models[parent];
-    const localMatrix = parent === undefined ? IDENTITY : local;
-    models.push(multiply(space, localMatrix));
-    gl.uniformMatrix4fv(uParentView, false, multiply(view, space));
-    gl.uniformMatrix4fv(uLocal, false, localMatrix);
-    gl.uniform1i(uMapping, mapping);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.bindVertexArray(mesh.vao);
-    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
-  }
+
+  for (const tv of tvs) tv.draw(view, rotation);
+
+  // Cylinder
+  gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(3.0, 0, 0), rotation)));
+  gl.bindTexture(gl.TEXTURE_2D, normalTexture);
+  drawMesh(cylinderMesh, NORMAL_MAPPING, IDENTITY);
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
