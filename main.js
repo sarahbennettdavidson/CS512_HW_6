@@ -773,7 +773,7 @@ screensButton?.addEventListener("click", () => {
 //   y: some screens mirrored left to right (flipped around the y axis)
 //   z: every screen turned a random number of quarter turns (around the z axis)
 // Which screens get what is picked at random each time a shuffle is switched on.
-// In index.html: <select id="shuffleAxis"> (x, y, z) and <button id="shuffleButton">.
+// In index.html: three toggle buttons, shuffleXButton, shuffleYButton and shuffleZButton.
 const shuffleOn = { x: false, y: false, z: false };
 
 function pickOrientations(axis) {
@@ -784,23 +784,17 @@ function pickOrientations(axis) {
   }
 }
 
-const shuffleAxis = document.getElementById("shuffleAxis");
-const shuffleButton = document.getElementById("shuffleButton");
-// The button shows whether the shuffle picked in the dropdown is on
-const showShuffle = () => {
-  if (shuffleButton && shuffleAxis) {
-    const axis = shuffleAxis.value;
-    shuffleButton.textContent = `Shuffle ${axis.toUpperCase()}: ${shuffleOn[axis] ? "on" : "off"}`;
-  }
-};
-shuffleAxis?.addEventListener("change", showShuffle);
-shuffleButton?.addEventListener("click", () => {
-  const axis = shuffleAxis.value;
-  shuffleOn[axis] = !shuffleOn[axis];
-  if (shuffleOn[axis]) pickOrientations(axis);
-  showShuffle();
-});
-showShuffle();
+for (const axis of ["x", "y", "z"]) {
+  const button = document.getElementById(`shuffle${axis.toUpperCase()}Button`);
+  const show = () => button.textContent = `Shuffle ${axis.toUpperCase()}: ${shuffleOn[axis] ? "on" : "off"}`;
+  if (!button) continue;
+  show();
+  button.addEventListener("click", () => {
+    shuffleOn[axis] = !shuffleOn[axis];
+    if (shuffleOn[axis]) pickOrientations(axis);
+    show();
+  });
+}
 
 // Channel sound with the browser's Web Audio API: ch 1 plays the video's own sound, ch 2 white
 // noise, ch 3 a 1000 Hz test tone. The tone and noise run all the time; their volumes are
