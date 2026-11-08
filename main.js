@@ -273,7 +273,11 @@ function scaleMatrix(sx, sy, sz) {
 
 const openCubeMesh = createMesh(createOpenCube());
 const planeMesh = createMesh(createPlane());
-const clouds = createClouds(gl, planeMesh);   // clouds.js: the sky behind the scene
+// The sky behind the scene, from clouds.js. If clouds.js didn't load (missing, misnamed, or not in
+// index.html), the scene still draws, on black, and the console says why.
+const clouds = typeof createClouds === "function"
+  ? createClouds(gl, planeMesh)
+  : (console.error("clouds.js didn't load: check it's next to index.html and has a <script> line before main.js"), { draw() {} });
 const cylinderMesh = createMesh(createCylinder());
 
 // makeSphere (models.js) gives positions, colors, UVs and indices. createMesh also needs normals
@@ -884,9 +888,12 @@ gl.clearColor(0, 0, 0, 1);
 const projection = perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
 const lightWorld = [3, 4, 5];
 
-// Interactive controls: the drag, slider and spin all orbit the camera around the world origin
-let dragRotX = 0, dragRotY = -0.5;      // mouse drag
-let camX = 0, camY = 0, camZ = -13;     // arrow keys, w, s; far enough back to see the whole stack
+// Interactive controls. The camera stays put; the controls move the objects:
+//   mouse drag and arrow keys / w, s: the TV stack only
+//   slider, axis dropdown and Start/Stop: the ball and the cylinder only
+const CAMERA_DISTANCE = 13;             // the fixed camera sits this far in front of the origin
+let dragRotX = 0, dragRotY = -0.5;      // mouse drag: turns the TV stack about its center
+let camX = 0, camY = 0, camZ = -13;     // arrow keys, w, s: move the TV stack (starts in its usual place)
 let sliderAngle = 0;                    // degrees
 let spinning = false, spinAngle = 0;    // Start/Stop button
 
@@ -934,30 +941,32 @@ function render(time) {
   clouds.draw(t);           // the sky, behind everything
   gl.useProgram(program);   // back to the scene program
 
-  // Camera: rotate the whole world about its origin, then move it in front of the camera.
-  // Every object and the light go through the same view, so they all turn together.
-  const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
-  const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
-  const view = multiply(translate(camX, camY, camZ), rotation);
+  // Fixed camera; the light stays fixed in the world
+  const view = translate(0, 0, -CAMERA_DISTANCE);
   gl.uniformMatrix4fv(uProjection, false, projection);
   gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
+
+  // TVs: the mouse drag turns the stack about its center, the keys move it
+  const tvView = multiply(translate(camX, camY, camZ), multiply(rotateY(dragRotY), rotateX(dragRotX)));
+  // Ball and cylinder: the slider, axis and Start/Stop turn each one about its own center
+  const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
 
   gl.activeTexture(gl.TEXTURE0);
   updateVideoTexture(tvVideo);
 
   const source = screenSource();
   layoutScreens(tvs, source.aspect, spreadScreens);   // cheap; redone each frame, so it follows the picture and TV positions
-  for (const tv of tvs) tv.draw(view, source.texture);
+  for (const tv of tvs) tv.draw(tvView, source.texture);
 
   // Big orange sphere behind the TVs. It uses the same triplanar mapping as the TVs, with the
   // radius in its local matrix, so the peel's dimples come out the same size as on a TV.
   const SPHERE_CENTER = [0, 0, -9], SPHERE_RADIUS = 6;
-  gl.uniformMatrix4fv(uParentView, false, multiply(view, translate(...SPHERE_CENTER)));
+  gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(...SPHERE_CENTER), axisRotation)));
   bindMaterial(orangeMaterial);
   drawMesh(sphereMesh, TRIPLANAR, scaleMatrix(SPHERE_RADIUS, SPHERE_RADIUS, SPHERE_RADIUS));
 
   // Cylinder
-  gl.uniformMatrix4fv(uParentView, false, multiply(view, translate(4.5, 0, 0)));   // beside the stack
+  gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(4.5, 0, 0), axisRotation)));   // beside the stack
   gl.bindTexture(gl.TEXTURE_2D, normalTexture);
   drawMesh(cylinderMesh, NORMAL_MAPPING, IDENTITY);
   requestAnimationFrame(render);
