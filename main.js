@@ -290,8 +290,8 @@ function sphereMeshData(latRes, lonRes) {
 const sphereMesh = createMesh(sphereMeshData(64, 64));
 
 // Upload an image into an existing texture. Set data for maps that hold numbers rather than
-// colors (normal and height maps), so the browser doesn't color-correct them. onLoad and
-// onError are optional callbacks.
+// colors (normal and height maps), so the browser doesn't color-correct them. onLoad (which
+// receives the image) and onError are optional callbacks.
 function setTextureImage(texture, url, data = false, onLoad = () => {}, onError = () => {}) {
   const image = new Image();
   image.onerror = onError;
@@ -303,7 +303,7 @@ function setTextureImage(texture, url, data = false, onLoad = () => {}, onError 
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     if (url.startsWith("blob:")) URL.revokeObjectURL(url);
-    onLoad();
+    onLoad(image);
   };
   image.src = url;
 }
@@ -410,6 +410,85 @@ function loadPresetMaterial(preset) {
 // All the folders load at the start, so switching is instant
 const presetMaterials = MATERIAL_PRESETS.map(preset => ({ name: preset.name, material: loadPresetMaterial(preset) }));
 const orangeMaterial = presetMaterials.find(p => p.name === "orange").material;
+
+// Noise texture: TV snow rendered on the GPU into a 512x512 texture, new every frame
+// Render to texture: https://webglfundamentals.org/webgl/lessons/webgl-render-to-texture.html
+// Data textures:     https://webglfundamentals.org/webgl/lessons/webgl-data-textures.html
+// Hash: pcg3d from Mark Jarzynski and Marc Olano, "Hash Functions for GPU Rendering",
+//       Journal of Computer Graphics Techniques 9(3), 2020, http://jcgt.org/published/0009/03/02/
+const NOISE_SIZE = 512;
+
+const NOISE_VERTEX_SHADER = `#version 300 es
+in vec3 aPosition;
+void main() {
+  // The plane spans -0.5..0.5; doubled, it covers the whole texture (-1..1 in clip space)
+  gl_Position = vec4(aPosition.xy * 2.0, 0.0, 1.0);
+}
+`;
+
+const NOISE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+precision highp int;    // 32-bit integers for the hash
+uniform uint uSeed;     // new every frame, so the snow moves
+uniform bool uColor;    // false: gray snow (one value in r, g and b); true: each channel random
+out vec4 fragColor;
+
+// Three numbers in, three unrelated random numbers out
+uvec3 pcg3d(uvec3 v) {
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  v ^= v >> 16u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  return v;
+}
+
+void main() {
+  // Hash this pixel's position with the seed, scaled to 0..1
+  vec3 r = vec3(pcg3d(uvec3(uvec2(gl_FragCoord.xy), uSeed))) / 4294967295.0;
+  fragColor = vec4(uColor ? r : vec3(r.x), 1.0);
+}
+`;
+
+// The texture to render into, allocated with no data (null)
+const noiseTexture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, noiseTexture);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, NOISE_SIZE, NOISE_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);   // hard-edged specks, no mipmaps
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+// Wrapping stays REPEAT (the default), so the snow tiles across a TV body
+
+// A framebuffer with the texture as its only attachment. No depth buffer: the noise pass
+// draws one flat plane, so there's nothing to sort.
+const noiseFramebuffer = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, noiseFramebuffer);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, noiseTexture, 0);
+if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+  console.error("The noise framebuffer can't be rendered to on this system");
+}
+gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+const noiseProgram = createProgram(NOISE_VERTEX_SHADER, NOISE_FRAGMENT_SHADER);
+const uNoiseSeed = gl.getUniformLocation(noiseProgram, "uSeed");
+const uNoiseColor = gl.getUniformLocation(noiseProgram, "uColor");
+let noiseFrame = 0;      // the seed: counts frames, so every frame gets new snow
+let colorSnow = Math.random() < 0.5;   // gray or colored, picked at random on each page load
+
+// Render a new frame of snow into noiseTexture, then point drawing back at the canvas.
+// The viewport has to match whatever is being drawn into, each time it changes.
+function renderNoise() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, noiseFramebuffer);
+  gl.viewport(0, 0, NOISE_SIZE, NOISE_SIZE);
+  gl.useProgram(noiseProgram);
+  gl.uniform1ui(uNoiseSeed, noiseFrame++);
+  gl.uniform1i(uNoiseColor, colorSnow ? 1 : 0);
+  gl.bindVertexArray(planeMesh.vao);
+  gl.drawElements(gl.TRIANGLES, planeMesh.count, gl.UNSIGNED_SHORT, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+  gl.useProgram(program);   // back to the scene program
+}
+
 
 function setMaterial(m) {
   for (const tv of tvs) tv.material = m;
@@ -541,17 +620,110 @@ function updateVideoTexture(v) {
   }
 }
 
-const tvVideo = loadVideoTexture("video.mp4");   // shared by every TV
+const tvVideo = loadVideoTexture("video2_2.mp4");   // shared by every TV
 
-// Sound toggle: <button id="soundButton">Sound on</button> in index.html.
-// The video starts muted because browsers only autoplay muted video, and they only let
-// a page unmute in response to a click, which is why this is a button.
+// Test pattern images for channel 3, in the tc folder next to index.html. Each time the channel
+// button reaches ch 3, one of them is picked at random.
+const TEST_PATTERN_FOLDER = "tc";
+const TEST_PATTERNS = ["FuBK_STANDARD.png", "PM5544_with_non-PAL_signals.png", "Testcard_F.jpg"];
+
+const blackTexture = solidTexture([0, 0, 0, 255]);   // shown on ch 3 if no test pattern loaded
+const testPatterns = [];                              // the ones that loaded: { texture, aspect }
+for (const file of TEST_PATTERNS) {
+  const texture = solidTexture([0, 0, 0, 255]);
+  setTextureImage(texture, `${TEST_PATTERN_FOLDER}/${encodeURIComponent(file)}`, false,
+    image => testPatterns.push({ texture, aspect: image.naturalWidth / image.naturalHeight }),
+    () => { gl.deleteTexture(texture); console.warn("Couldn't load test pattern", file); });
+}
+
+// Channels: ch 1 the video, ch 2 snow, ch 3 a test pattern
+let channel = 0;            // 0, 1, 2 for ch 1, 2, 3
+let testPattern = null;     // the test pattern picked for ch 3
+
+// What the screens show on the current channel. aspect is the picture's width / height
+// (null while the video's size isn't known yet).
+function screenSource() {
+  if (channel === 0) {
+    const v = tvVideo.video;
+    return { texture: tvVideo.texture, aspect: v.videoWidth ? v.videoWidth / v.videoHeight : null };
+  }
+  if (channel === 1) return { texture: noiseTexture, aspect: 1 };
+  return testPattern || { texture: blackTexture, aspect: 1 };
+}
+
+// Channel button: <button id="channelButton">Ch 1</button> in index.html
+const channelButton = document.getElementById("channelButton");
+channelButton?.addEventListener("click", () => {
+  channel = (channel + 1) % 3;
+  if (channel === 2 && testPatterns.length) {
+    // A random test pattern, a different one from last time when there's more than one
+    const others = testPatterns.filter(p => p !== testPattern);
+    testPattern = (others.length ? others : testPatterns)[Math.floor(Math.random() * (others.length || testPatterns.length))];
+  }
+  channelButton.textContent = `Ch ${channel + 1}`;
+  updateSound();
+});
+
+// Screens button: <button id="screensButton">Screens: spread</button> in index.html.
+// spread: one picture across all the screens; repeat: the whole picture on every screen.
+let spreadScreens = true;
+const screensButton = document.getElementById("screensButton");
+screensButton?.addEventListener("click", () => {
+  spreadScreens = !spreadScreens;
+  screensButton.textContent = spreadScreens ? "Screens: spread" : "Screens: repeat";
+});
+
+// Channel sound with the browser's Web Audio API: ch 1 plays the video's own sound, ch 2 white
+// noise, ch 3 a 1000 Hz test tone. The tone and noise run all the time; their volumes are
+// turned up or down. The audio is created on the first click, because browsers only start
+// sound after the person has done something on the page.
+const TONE_VOLUME = 0.1;     // 1 kHz at -20 dBFS (amplitude 0.1), the usual test-tone level
+const NOISE_VOLUME = 0.08;
+let soundOn = false;
+let audio = null;
+
+function setupAudio() {
+  if (audio) return audio;
+  const ctx = new AudioContext();
+
+  const tone = new OscillatorNode(ctx, { type: "sine", frequency: 1000 });
+  const toneGain = new GainNode(ctx, { gain: 0 });
+  tone.connect(toneGain).connect(ctx.destination);
+  tone.start();
+
+  // White noise: two seconds of random samples between -1 and 1, played on a loop
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+  const samples = buffer.getChannelData(0);
+  for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
+  const noise = new AudioBufferSourceNode(ctx, { buffer, loop: true });
+  const noiseGain = new GainNode(ctx, { gain: 0 });
+  noise.connect(noiseGain).connect(ctx.destination);
+  noise.start();
+
+  audio = { ctx, toneGain, noiseGain };
+  return audio;
+}
+
+// Play the sound that goes with the current channel, or nothing when the sound is off
+function updateSound() {
+  const video = tvVideo.video;
+  video.muted = !(soundOn && channel === 0);
+  if (!video.muted) video.play();   // in case autoplay was blocked
+  if (!soundOn && !audio) return;   // nothing to turn down yet
+
+  const { ctx, toneGain, noiseGain } = setupAudio();
+  if (ctx.state === "suspended") ctx.resume();
+  // setTargetAtTime fades over about 10 ms instead of jumping, which would click
+  noiseGain.gain.setTargetAtTime(soundOn && channel === 1 ? NOISE_VOLUME : 0, ctx.currentTime, 0.01);
+  toneGain.gain.setTargetAtTime(soundOn && channel === 2 ? TONE_VOLUME : 0, ctx.currentTime, 0.01);
+}
+
+// Sound toggle: <button id="soundButton">Sound on</button> in index.html
 const soundButton = document.getElementById("soundButton");
 soundButton?.addEventListener("click", () => {
-  const video = tvVideo.video;
-  video.muted = !video.muted;
-  if (!video.muted) video.play();   // in case autoplay was blocked
-  soundButton.textContent = video.muted ? "Sound on" : "Sound off";
+  soundOn = !soundOn;
+  soundButton.textContent = soundOn ? "Sound off" : "Sound on";
+  updateSound();
 });
 
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, VIDEO = 2, TRIPLANAR = 3;
@@ -580,7 +752,7 @@ class TV {
     this.border = border;            // width of the border strips, relative to size
     this.depth = depth;              // how far the inner walls run back, relative to size
     this.material = brickMaterial;   // body material; reassign at any time
-    this.videoCrop = [0, 0, 1, 1];   // part of the video frame shown: u0, v0, u1, v1 (set by layoutVideoWall)
+    this.videoCrop = [0, 0, 1, 1];   // part of the picture shown on the screen: u0, v0, u1, v1 (set by layoutScreens)
     this.build();
   }
 
@@ -629,39 +801,49 @@ class TV {
     this.screenLocal = translate(0, 0, hz - margin);
   }
 
-  draw(view) {
+  draw(view, screenTexture) {
     const space = translate(...this.position);
     gl.uniformMatrix4fv(uParentView, false, multiply(view, space));
 
     bindMaterial(this.material);
     for (const { mesh, local } of this.parts) drawMesh(mesh, TRIPLANAR, local);
 
-    gl.bindTexture(gl.TEXTURE_2D, tvVideo.texture);
+    gl.bindTexture(gl.TEXTURE_2D, screenTexture);
     gl.uniform4fv(uVideoCrop, this.videoCrop);
     drawMesh(this.screenMesh, VIDEO, this.screenLocal);
   }
 }
 
-// Spread the shared video across all the screens like a video wall: each TV shows the part
-// of the frame that falls on its screen, based on the TVs' positions. The frame covers the
-// screens' bounding box without stretching; whatever sticks out past it is cropped evenly.
-function layoutVideoWall(tvs, video) {
+// The part of a picture (as u0, v0, u1, v1) that covers a target of the given aspect without
+// stretching: the picture is scaled to fill it, and whatever sticks out is cropped evenly.
+function coverCrop(targetAspect, pictureAspect) {
+  if (!pictureAspect) return [0, 0, 1, 1];
+  const uSpan = Math.min(1, targetAspect / pictureAspect);
+  const vSpan = Math.min(1, pictureAspect / targetAspect);
+  const u0 = (1 - uSpan) / 2, v0 = (1 - vSpan) / 2;
+  return [u0, v0, u0 + uSpan, v0 + vSpan];
+}
+
+// Work out which part of the picture each screen shows, from the TVs' positions.
+//   spread: one picture covers the box around all the screens, like a video wall, and each
+//           TV shows the part that falls on its screen
+//   repeat: every screen shows the whole picture, cropped to that screen's shape
+function layoutScreens(tvs, pictureAspect, spread) {
   const rects = tvs.map(({ position: [x, y], screenHalf: [sx, sy] }) => [x - sx, y - sy, x + sx, y + sy]);
+
+  if (!spread) {
+    tvs.forEach(tv => tv.videoCrop = coverCrop(tv.screenHalf[0] / tv.screenHalf[1], pictureAspect));
+    return;
+  }
+
   const x0 = Math.min(...rects.map(r => r[0])), y0 = Math.min(...rects.map(r => r[1]));
   const x1 = Math.max(...rects.map(r => r[2])), y1 = Math.max(...rects.map(r => r[3]));
-
-  // Part of the frame the whole wall uses, centered
-  const wallAspect = (x1 - x0) / (y1 - y0);
-  const videoAspect = video.videoWidth ? video.videoWidth / video.videoHeight : wallAspect;
-  const uSpan = Math.min(1, wallAspect / videoAspect);
-  const vSpan = Math.min(1, videoAspect / wallAspect);
-  const u0 = (1 - uSpan) / 2, v0 = (1 - vSpan) / 2;
-
+  const [u0, v0, u1, v1] = coverCrop((x1 - x0) / (y1 - y0), pictureAspect);
   tvs.forEach((tv, i) => {
     const [a, b, c, d] = rects[i];
     tv.videoCrop = [
-      u0 + (a - x0) / (x1 - x0) * uSpan, v0 + (b - y0) / (y1 - y0) * vSpan,
-      u0 + (c - x0) / (x1 - x0) * uSpan, v0 + (d - y0) / (y1 - y0) * vSpan
+      u0 + (a - x0) / (x1 - x0) * (u1 - u0), v0 + (b - y0) / (y1 - y0) * (v1 - v0),
+      u0 + (c - x0) / (x1 - x0) * (u1 - u0), v0 + (d - y0) / (y1 - y0) * (v1 - v0)
     ];
   });
 }
@@ -744,6 +926,8 @@ function render(time) {
   const t = time / 1000;
   if (spinning) spinAngle += t - lastTime;
   lastTime = t;
+
+  renderNoise();   // first, into the noise texture; then everything below draws to the canvas
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   // Camera: rotate the whole world about its origin, then move it in front of the camera.
@@ -757,8 +941,9 @@ function render(time) {
   gl.activeTexture(gl.TEXTURE0);
   updateVideoTexture(tvVideo);
 
-  layoutVideoWall(tvs, tvVideo.video);   // cheap; redone each frame so it follows the video size and TV positions
-  for (const tv of tvs) tv.draw(view);
+  const source = screenSource();
+  layoutScreens(tvs, source.aspect, spreadScreens);   // cheap; redone each frame, so it follows the picture and TV positions
+  for (const tv of tvs) tv.draw(view, source.texture);
 
   // Big orange sphere behind the TVs. It uses the same triplanar mapping as the TVs, with the
   // radius in its local matrix, so the peel's dimples come out the same size as on a TV.
