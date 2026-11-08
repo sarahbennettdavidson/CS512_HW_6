@@ -209,4 +209,3 @@ const spherePos = sphere.sphPositions;
 const sphereColors = sphere.sphColors;
 const sphereIndices = sphere.sphIndices;
 const sphereUVs = sphere.sphUVs;
-}
