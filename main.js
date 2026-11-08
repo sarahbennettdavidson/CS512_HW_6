@@ -674,9 +674,9 @@ for (const file of TEST_PATTERNS) {
     () => { gl.deleteTexture(texture); console.warn("Couldn't load test pattern", file); });
 }
 
-// Channels: ch 1 the video, ch 2 snow, ch 3 a test pattern, ch 4 a mix of all three
+// Channels: ch 1 the video, ch 2 snow, ch 3 a test pattern, and Mix: all three on different screens
 const SOURCES = ["video", "snow", "test"];   // what ch 1, 2 and 3 show
-let channel = 0;            // 0 to 3 for ch 1 to 4
+let channel = 0;            // 0, 1, 2 for ch 1 to 3; 3 for Mix
 let testPattern = null;     // the test pattern picked for ch 3
 
 // A random test pattern, a different one from `previous` when there's more than one
@@ -698,13 +698,13 @@ function picture(source, pattern) {
   return pattern || { texture: blackTexture, aspect: 1 };
 }
 
-// Ch 4, the mix: every screen gets its own random source, its own test pattern if it's
-// showing one, and its own choice of spread (its part of the picture across all the screens)
-// or repeat (the whole picture). Picked again each time ch 4 comes on.
+// Mix: every screen gets its own random source, and its own test pattern if it's showing one.
+// How each picture sits on its screen follows the Screens button, as on the other channels.
+// Picked again each time Mix comes on.
 function mixScreens() {
   for (const tv of tvs) {
     const source = SOURCES[Math.floor(Math.random() * SOURCES.length)];
-    tv.mix = { source, pattern: pickTestPattern(null), spread: Math.random() < 0.5 };
+    tv.mix = { source, pattern: pickTestPattern(null) };
   }
 }
 
@@ -715,12 +715,12 @@ channelButton?.addEventListener("click", () => {
   if (channel === 1 || channel === 3) colorSnow = Math.random() < 0.5;   // gray or colored snow, picked each time
   if (channel === 2) testPattern = pickTestPattern(testPattern);
   if (channel === 3) mixScreens();
-  channelButton.textContent = `Ch ${channel + 1}`;
+  channelButton.textContent = channel === 3 ? "Mix" : `Ch ${channel + 1}`;
   updateSound();
 });
 
 // Screens button: <button id="screensButton">Screens: spread</button> in index.html.
-// Goes through these, for ch 1 to 3 (on ch 4 every screen makes its own choice):
+// Goes through these, on every channel including Mix:
 //   spread:         one picture across all the screens
 //   repeat:         the whole picture on every screen
 //   mix:            some screens spread, some repeat, picked at random
@@ -827,7 +827,7 @@ function setupAudio() {
   return audio;
 }
 
-// Play the sound that goes with the channel (on ch 4, all three together), or nothing when the
+// Play the sound that goes with the channel (on Mix, all three together), or nothing when the
 // sound is off
 function updateSound() {
   const showing = new Set(channel === 3 ? SOURCES : [SOURCES[channel]]);
@@ -1126,17 +1126,16 @@ function render(time) {
   updateVideoTexture(tvVideo);
 
   // Each screen's picture and crop; redone each frame, so it follows the video size and TV positions.
-  // On ch 4 every screen has its own source and spread/repeat; otherwise they all share them.
+  // On Mix every screen has its own source; the Screens mode applies on every channel.
   const wall = screenWall(tvs);
   for (const tv of tvs) {
     const mixed = channel === 3;
     const pic = mixed ? picture(tv.mix.source, tv.mix.pattern) : picture(SOURCES[channel], testPattern);
     const mode = SCREEN_MODES[screenMode];
-    const spread = mixed ? tv.mix.spread
-      : mode === "spread" || mode === "spread shuffle" || (mode === "mix" && tv.screenSpread);
+    const spread = mode === "spread" || mode === "spread shuffle" || (mode === "mix" && tv.screenSpread);
     // Orientation shuffles that are switched on: [upside down, mirrored, quarter turns]
     tv.orient = [shuffleOn.x && tv.flipX ? 1 : 0, shuffleOn.y && tv.flipY ? 1 : 0, shuffleOn.z ? tv.quarterTurns : 0];
-    tv.videoCrop = screenCrop(tv, wall, pic.aspect, spread, !mixed && mode === "spread shuffle" ? tv.pieceOf : tv,
+    tv.videoCrop = screenCrop(tv, wall, pic.aspect, spread, mode === "spread shuffle" ? tv.pieceOf : tv,
                               tv.orient[2] % 2 === 1);
     tv.draw(tvView, pic.texture);
   }
