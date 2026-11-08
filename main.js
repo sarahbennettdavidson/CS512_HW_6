@@ -880,7 +880,7 @@ class TV {
     // createTvScreen takes arc lengths; asin turns the half-widths we want into them.
     const margin = 0.05 * this.size;
     const sx = ix + margin, sy = iy + margin;     // screen half-extents (straight across)
-    const R = 3 * Math.max(hx, hy);               // curvature radius grows with the TV
+    const R = 2.5 * Math.max(hx, hy);             // curvature radius grows with the TV; smaller curves more
     this.screenHalf = [sx, sy];
     this.screenMesh = createMesh(createTvScreen(30, 30, 2 * R * Math.asin(sx / R), 2 * R * Math.asin(sy / R), R));
     // Screen's front-most point is its center (local z = 0); put it just behind the opening
@@ -942,13 +942,15 @@ function screenCrop(tv, wall, pictureAspect, spread, pieceOf = tv) {
 const STACK_RANDOM = {
   rowShift: 0.4,   // each row moves left or right by up to this much, so rows can overhang
   extraGap: 0.2,   // up to this much extra space between neighbors in a row
-  turn: 0.06       // each TV turns about its vertical axis by up to this much (radians, about 3.4°)
+  turn: 0.09,      // each TV turns about its vertical axis by up to this much (radians, about 5°)
+  depth: 0.3      // each TV moves forward or back by up to this much
 };
 const randomBetween = limit => (Math.random() * 2 - 1) * limit;   // from -limit to limit
 
 // Stack TVs in rows from the bottom up. Each row lists its TVs' aspects; their left-to-right order
-// is shuffled. Rows sit on top of each other, and the whole stack is centered on the origin.
-function stackTVs(rows, gap = 0.05) {
+// is shuffled. Rows sit directly on top of each other, and the whole stack is centered on the
+// origin. sideGap is the smallest space between neighbors in a row.
+function stackTVs(rows, sideGap = 0.05) {
   const built = rows.map(aspects => {
     const row = aspects.map(aspect => new TV({ aspect }));
     for (let i = row.length - 1; i > 0; i--) {   // random order: wide one on the left or the right
@@ -959,20 +961,20 @@ function stackTVs(rows, gap = 0.05) {
     return row;
   });
   const rowHeights = built.map(row => Math.max(...row.map(tv => 2 * tv.half[1])));
-  const stackHeight = rowHeights.reduce((a, b) => a + b, 0) + gap * (rows.length - 1);
+  const stackHeight = rowHeights.reduce((a, b) => a + b, 0);
 
   let y = -stackHeight / 2;                 // bottom of the current row
   built.forEach((row, r) => {
     // Width each TV takes up once turned (its box seen from the front), so neighbors never touch
     const widths = row.map(tv => 2 * (tv.half[0] * Math.cos(tv.turn) + tv.half[2] * Math.abs(Math.sin(tv.turn))));
-    const gaps = row.slice(1).map(() => gap + Math.random() * STACK_RANDOM.extraGap);
+    const gaps = row.slice(1).map(() => sideGap + Math.random() * STACK_RANDOM.extraGap);
     const rowWidth = widths.reduce((a, b) => a + b, 0) + gaps.reduce((a, b) => a + b, 0);
     let x = -rowWidth / 2 + randomBetween(STACK_RANDOM.rowShift);   // left edge of the next TV
     row.forEach((tv, i) => {
-      tv.position = [x + widths[i] / 2, y + tv.half[1], 0];
+      tv.position = [x + widths[i] / 2, y + tv.half[1], randomBetween(STACK_RANDOM.depth)];
       x += widths[i] + (gaps[i] || 0);
     });
-    y += rowHeights[r] + gap;
+    y += rowHeights[r];
   });
   return built.flat();
 }
