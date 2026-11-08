@@ -712,23 +712,41 @@ channelButton?.addEventListener("click", () => {
 //   spread:         one picture across all the screens
 //   repeat:         the whole picture on every screen
 //   mix:            some screens spread, some repeat, picked at random
-//   spread shuffle: spread, but the screens' pieces of the picture swapped around at random
+//   spread shuffle: spread, but the pieces of the picture swapped between screens at random
 const SCREEN_MODES = ["spread", "repeat", "mix", "spread shuffle"];
 let screenMode = 0;
+
+// A random order of 0..n-1 in which nothing stays in its own place (when n is at least 2)
+function derangement(n) {
+  const order = [...Array(n).keys()];
+  if (n < 2) return order;
+  do {
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+  } while (order.some((k, i) => k === i));
+  return order;
+}
 
 // Pick the random parts of mix and spread shuffle; done each time one of them comes on
 function arrangeScreens() {
   for (const tv of tvs) tv.screenSpread = Math.random() < 0.5;
 
-  // A random order in which no screen keeps its own piece
-  const order = tvs.map((_, i) => i);
-  do {
-    for (let i = order.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [order[i], order[j]] = [order[j], order[i]];
-    }
-  } while (order.some((k, i) => k === i));
-  tvs.forEach((tv, i) => tv.pieceOf = tvs[order[i]]);
+  // Pieces are swapped only between screens of the same shape and size (the 16:9s among
+  // themselves, the squares among themselves). Each piece then keeps exactly its place in the
+  // picture, corners and all, and just moves to another monitor: no stretching, no overlaps,
+  // no repeats.
+  const groups = new Map();
+  for (const tv of tvs) {
+    const key = tv.screenHalf.map(h => h.toFixed(4)).join();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(tv);
+  }
+  for (const group of groups.values()) {
+    const order = derangement(group.length);
+    group.forEach((tv, i) => tv.pieceOf = group[order[i]]);
+  }
 }
 
 const screensButton = document.getElementById("screensButton");
@@ -809,7 +827,7 @@ function drawMesh(mesh, mapping, local) {
 //
 // size is the box's half-height and aspect is the screen opening's width / height;
 // the box is as wide as the opening plus the border on each side. border and depth
-// are relative to size. The TV's own space is translate(position), and every
+// are relative to size. The TV's own space is translate(position) * rotateY(turn), and every
 // part is built in real units inside it, so triplanar bricks stay the same size on all TVs.
 class TV {
   constructor({ position = [0, 0, 0], size = 1, aspect = 1, border = 0.2, depth = 0.5 } = {}) {
@@ -819,6 +837,7 @@ class TV {
     this.border = border;            // width of the border strips, relative to size
     this.depth = depth;              // how far the inner walls run back, relative to size
     this.material = brickMaterial;   // body material; reassign at any time
+    this.turn = 0;                   // turn about its vertical axis, in radians (set by stackTVs)
     this.videoCrop = [0, 0, 1, 1];   // part of the picture shown on the screen: u0, v0, u1, v1 (set each frame in render)
     this.build();
   }
@@ -869,7 +888,7 @@ class TV {
   }
 
   draw(view, screenTexture) {
-    const space = translate(...this.position);
+    const space = multiply(translate(...this.position), rotateY(this.turn));
     gl.uniformMatrix4fv(uParentView, false, multiply(view, space));
 
     bindMaterial(this.material);
@@ -919,22 +938,39 @@ function screenCrop(tv, wall, pictureAspect, spread, pieceOf = tv) {
   return [u(x - sx), v(y - sy), u(x + sx), v(y + sy)];
 }
 
-// Stack TVs in rows from the bottom up. Each row lists its TVs' aspects from left to right;
-// rows are centered on x = 0 and sit on top of each other, and the whole stack is centered
-// on the origin so the camera orbits around its middle.
+// Randomness in the stack, picked again on each page load
+const STACK_RANDOM = {
+  rowShift: 0.4,   // each row moves left or right by up to this much, so rows can overhang
+  extraGap: 0.2,   // up to this much extra space between neighbors in a row
+  turn: 0.06       // each TV turns about its vertical axis by up to this much (radians, about 3.4°)
+};
+const randomBetween = limit => (Math.random() * 2 - 1) * limit;   // from -limit to limit
+
+// Stack TVs in rows from the bottom up. Each row lists its TVs' aspects; their left-to-right order
+// is shuffled. Rows sit on top of each other, and the whole stack is centered on the origin.
 function stackTVs(rows, gap = 0.05) {
-  const built = rows.map(aspects => aspects.map(aspect => new TV({ aspect })));
+  const built = rows.map(aspects => {
+    const row = aspects.map(aspect => new TV({ aspect }));
+    for (let i = row.length - 1; i > 0; i--) {   // random order: wide one on the left or the right
+      const j = Math.floor(Math.random() * (i + 1));
+      [row[i], row[j]] = [row[j], row[i]];
+    }
+    for (const tv of row) tv.turn = randomBetween(STACK_RANDOM.turn);
+    return row;
+  });
   const rowHeights = built.map(row => Math.max(...row.map(tv => 2 * tv.half[1])));
   const stackHeight = rowHeights.reduce((a, b) => a + b, 0) + gap * (rows.length - 1);
 
   let y = -stackHeight / 2;                 // bottom of the current row
   built.forEach((row, r) => {
-    const widths = row.map(tv => 2 * tv.half[0]);
-    const rowWidth = widths.reduce((a, b) => a + b, 0) + gap * (row.length - 1);
-    let x = -rowWidth / 2;                  // left edge of the next TV
+    // Width each TV takes up once turned (its box seen from the front), so neighbors never touch
+    const widths = row.map(tv => 2 * (tv.half[0] * Math.cos(tv.turn) + tv.half[2] * Math.abs(Math.sin(tv.turn))));
+    const gaps = row.slice(1).map(() => gap + Math.random() * STACK_RANDOM.extraGap);
+    const rowWidth = widths.reduce((a, b) => a + b, 0) + gaps.reduce((a, b) => a + b, 0);
+    let x = -rowWidth / 2 + randomBetween(STACK_RANDOM.rowShift);   // left edge of the next TV
     row.forEach((tv, i) => {
       tv.position = [x + widths[i] / 2, y + tv.half[1], 0];
-      x += widths[i] + gap;
+      x += widths[i] + (gaps[i] || 0);
     });
     y += rowHeights[r] + gap;
   });
@@ -942,10 +978,10 @@ function stackTVs(rows, gap = 0.05) {
 }
 
 const tvs = stackTVs([
-  [16 / 9, 1],   // bottom
-  [1, 16 / 9],
-  [16 / 9, 1],
-  [16 / 9]       // top
+  [16 / 9, 4 / 3],   // bottom
+  [16 / 9, 4 / 3],
+  [16 / 9, 4 / 3],
+  [16 / 9]           // top
 ]);
 
 // The imaginary ground plane: the height the bottom row of TVs stands on
