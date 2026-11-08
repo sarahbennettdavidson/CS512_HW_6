@@ -393,6 +393,13 @@ const MATERIAL_PRESETS = [
     color: "fabric_0019_color_1k.jpg",
     normal: "fabric_0019_normal_opengl_1k.png",
     height: "fabric_0019_height_1k.png"
+  },
+  {
+    name: "fur",
+    folder: "fabrics_0059_1k_SkuReA",
+    color: "fabrics_0059_color_1k.jpg",
+    normal: "fabrics_0059_normal_opengl_1k.png",
+    height: "fabrics_0059_height_1k.png"
   }
 ];
 
@@ -421,7 +428,7 @@ function loadPresetMaterial(preset) {
 // All the folders load at the start, so switching is instant
 const presetMaterials = MATERIAL_PRESETS.map(preset => ({ name: preset.name, material: loadPresetMaterial(preset) }));
 const orangeMaterial = presetMaterials.find(p => p.name === "orange").material;
-const knittedMaterial = presetMaterials.find(p => p.name === "knitted").material;
+const furMaterial = presetMaterials.find(p => p.name === "fur").material;
 
 // Noise texture: TV snow rendered on the GPU into a 512x512 texture, new every frame
 // Render to texture: https://webglfundamentals.org/webgl/lessons/webgl-render-to-texture.html
@@ -914,7 +921,7 @@ const GROUND_Y = Math.min(...tvs.map(tv => tv.position[1] - tv.half[1]));
 // from CAMERA_DISTANCE in front)
 const SPHERE_CENTER = [-7, 4, -14], SPHERE_RADIUS = 6;   // upper left, further back
 const CYLINDER_CENTER = [3.2, -1, 6];                     // right, close to the camera
-const TORUS_CENTER = [-1.6, GROUND_Y + TORUS_MINOR, 2.2]; // lying on the ground in front of the screens, a little left
+const TORUS_CENTER = [-2.3, GROUND_Y + TORUS_MINOR, 2.2]; // lying on the ground in front of the screens, to the left
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
@@ -1008,10 +1015,10 @@ function render(time) {
   gl.bindTexture(gl.TEXTURE_2D, normalTexture);
   drawMesh(cylinderMesh, NORMAL_MAPPING, IDENTITY);
 
-  // Torus in the knitted fabric, built at its real size, so the triplanar weave matches the TVs'.
+  // Torus in the fur, built at its real size, so the triplanar texture is the same scale as on the TVs.
   // Like the ball and cylinder, the slider, axis and Start/Stop turn it about its own center.
   gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(...TORUS_CENTER), axisRotation)));
-  bindMaterial(knittedMaterial);
+  bindMaterial(furMaterial);
   if (torusMesh) drawMesh(torusMesh, TRIPLANAR, IDENTITY);
   requestAnimationFrame(render);
 }
