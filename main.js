@@ -4,25 +4,31 @@ in vec3 aNormal;
 in vec3 aTangent;
 in vec2 aTexCoord;
 
-uniform mat4 uModelView;
+uniform mat4 uParentView;  // view * the space the object sits in (rotation + translation only)
+uniform mat4 uLocal;       // the object's transform inside that space; identity for top-level objects
 uniform mat4 uProjection;
 
 out vec3 vPosition;
 out vec3 vNormal;
 out vec3 vTangent;
 out vec2 vTexCoord;
+out vec3 vObjPos;      // position in the parent's space, used by triplanar mapping
+out vec3 vObjNormal;   // normal in the parent's space
 
 void main() {
-  vec4 p = uModelView * vec4(aPosition, 1.0);
+  vec4 objPos = uLocal * vec4(aPosition, 1.0);
+  vec4 p = uParentView * objPos;
   vPosition = p.xyz;
 
   // Inverse transpose for potential non-uniform scalings
-  mat3 mv = mat3(uModelView);
+  mat3 mv = mat3(uParentView * uLocal);
   vNormal = transpose(inverse(mv)) * aNormal;
-
-
   vTangent = mv * aTangent;
   vTexCoord = aTexCoord;
+
+  vObjPos = objPos.xyz;
+  vObjNormal = transpose(inverse(mat3(uLocal))) * aNormal;
+
   gl_Position = uProjection * p;
 }
 `;
@@ -34,20 +40,32 @@ in vec3 vPosition;
 in vec3 vNormal;
 in vec3 vTangent;
 in vec2 vTexCoord;
+in vec3 vObjPos;
+in vec3 vObjNormal;
 
 uniform vec3 uLightPos;
 uniform sampler2D uTexture;
-uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = video (unlit)
+uniform highp mat4 uParentView;  // highp to match the vertex shader, or the program won't link
+uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = video (unlit), 3 = triplanar bump mapping
 
 out vec4 fragColor;
 
 const float bumpScale = 3.0;
+const float triScale = 0.5;   // texture copies per unit; 0.5 = one copy per 2-unit cube face
 
 // convert RGB to luminance (Rec._601 standard, https://en.wikipedia.org/wiki/Rec._601)
 // or you can use a height map texture
 float height(vec2 uv) {
   vec3 c = texture(uTexture, uv).rgb;
   return 1.0 - dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+// Slope of the height field at uv (dh/du, dh/dv), by central differences one texel each way
+vec2 heightSlope(vec2 uv) {
+  vec2 texel = 1.0 / vec2(textureSize(uTexture, 0));
+  float dhdu = (height(uv + vec2(texel.x, 0.0)) - height(uv - vec2(texel.x, 0.0))) * 0.5;
+  float dhdv = (height(uv + vec2(0.0, texel.y)) - height(uv - vec2(0.0, texel.y))) * 0.5;
+  return vec2(dhdu, dhdv);
 }
 
 void main() {
@@ -57,27 +75,63 @@ void main() {
     return;
   }
 
-  // Tangent frame (T, B, N)
-  vec3 N = normalize(vNormal);
-  vec3 T = normalize(vTangent - dot(vTangent, N) * N);
-  vec3 B = cross(N, T);
-  mat3 TBN = mat3(T, B, N);
-
   vec3 baseColor;
-  vec3 n;
+  vec3 N;
 
-  if (uMapping == 0) {
-    // Bump mapping: tilt the normal against the gradient of the height field
-    vec2 du = vec2(1.0 / float(textureSize(uTexture, 0).x), 0.0);
-    vec2 dv = vec2(0.0, 1.0 / float(textureSize(uTexture, 0).y));
-    float dhdu = (height(vTexCoord + du) - height(vTexCoord - du)) * 0.5;
-    float dhdv = (height(vTexCoord + dv) - height(vTexCoord - dv)) * 0.5;
-    n = normalize(vec3(-bumpScale * dhdu, -bumpScale * dhdv, 1.0));
-    baseColor = texture(uTexture, vTexCoord).rgb;
+  if (uMapping == 3) {
+    // Triplanar: project the texture along x, y and z in the parent's space,
+    // weighted by how much the surface faces each axis
+    vec3 No = normalize(vObjNormal);
+    vec3 w = abs(No);
+    w /= (w.x + w.y + w.z);
+
+    vec3 p = vObjPos * triScale + 0.5;
+    vec2 uvX = p.zy;   // T = +z, B = +y
+    vec2 uvY = p.xz;   // T = +x, B = +z
+    vec2 uvZ = p.xy;   // T = +x, B = +y
+
+    // Blend the colors, and the height slopes as 3D vectors along each projector's T and B.
+    // Axis-aligned faces have one weight of 1 and two of 0, so only one projector is sampled.
+    vec3 color = vec3(0.0);
+    vec3 g = vec3(0.0);
+    if (w.x > 0.001) {
+      vec2 s = heightSlope(uvX);
+      color += w.x * texture(uTexture, uvX).rgb;
+      g += w.x * (s.x * vec3(0.0, 0.0, 1.0) + s.y * vec3(0.0, 1.0, 0.0));
+    }
+    if (w.y > 0.001) {
+      vec2 s = heightSlope(uvY);
+      color += w.y * texture(uTexture, uvY).rgb;
+      g += w.y * (s.x * vec3(1.0, 0.0, 0.0) + s.y * vec3(0.0, 0.0, 1.0));
+    }
+    if (w.z > 0.001) {
+      vec2 s = heightSlope(uvZ);
+      color += w.z * texture(uTexture, uvZ).rgb;
+      g += w.z * (s.x * vec3(1.0, 0.0, 0.0) + s.y * vec3(0.0, 1.0, 0.0));
+    }
+
+    baseColor = color;
+    // Tilt the normal against the slope, then bring it from the parent's space to eye space
+    N = normalize(mat3(uParentView) * (No - bumpScale * g));
   } else {
-    // Normal mapping: the texture stores the tangent-space normal in [0, 1]
-    n = normalize(texture(uTexture, vTexCoord).rgb * 2.0 - 1.0);
-    baseColor = vec3(0.85, 0.65, 0.3);
+    // Tangent frame (T, B, N) from the mesh
+    vec3 Ng = normalize(vNormal);
+    vec3 T = normalize(vTangent - dot(vTangent, Ng) * Ng);
+    vec3 B = cross(Ng, T);
+    mat3 TBN = mat3(T, B, Ng);
+    vec3 n;
+
+    if (uMapping == 0) {
+      // Bump mapping: tilt the normal against the gradient of the height field
+      vec2 s = heightSlope(vTexCoord);
+      n = normalize(vec3(-bumpScale * s.x, -bumpScale * s.y, 1.0));
+      baseColor = texture(uTexture, vTexCoord).rgb;
+    } else {
+      // Normal mapping: the texture stores the tangent-space normal in [0, 1]
+      n = normalize(texture(uTexture, vTexCoord).rgb * 2.0 - 1.0);
+      baseColor = vec3(0.85, 0.65, 0.3);
+    }
+    N = normalize(TBN * n);
   }
 
   vec3 Ka = 0.2 * baseColor;
@@ -85,7 +139,6 @@ void main() {
   vec3 Ks = vec3(0.5);
   float shininess = 32.0;
 
-  N = normalize(TBN * n);
   vec3 L = normalize(uLightPos - vPosition);
   vec3 V = normalize(-vPosition);
   vec3 R = reflect(-L, N);
@@ -128,7 +181,7 @@ const shaderError = document.getElementById("shaderError");
 vertEditor.value = VERTEX_SHADER;
 fragEditor.value = FRAGMENT_SHADER;
 
-let program, uModelView, uProjection, uLightPos, uMapping;
+let program, uParentView, uLocal, uProjection, uLightPos, uMapping;
 
 function updateProgram() {
   try {
@@ -136,7 +189,8 @@ function updateProgram() {
     gl.deleteProgram(program);
     program = prog;
     gl.useProgram(program);
-    uModelView = gl.getUniformLocation(program, "uModelView");
+    uParentView = gl.getUniformLocation(program, "uParentView");
+    uLocal = gl.getUniformLocation(program, "uLocal");
     uProjection = gl.getUniformLocation(program, "uProjection");
     uLightPos = gl.getUniformLocation(program, "uLightPos");
     uMapping = gl.getUniformLocation(program, "uMapping");
@@ -256,12 +310,13 @@ for (let k = 0; k < 4; k++) {
       multiply(rotateX(Math.PI / 2), scaleMatrix(2 * INNER, DEPTH, 1)))));
 }
 
-const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, VIDEO = 2;
+const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, VIDEO = 2, TRIPLANAR = 3;
+const IDENTITY = translate(0, 0, 0);
 const objects = [
-  { mesh: openCubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-3.0, 0, 0] },
+  { mesh: openCubeMesh, texture: brickTexture, mapping: TRIPLANAR, offset: [-3.0, 0, 0] },
   // Screen's front-most point is its center (local z = 0); put it 0.05 behind the open face at z = 1
   { mesh: tvScreenMesh, texture: tvVideo.texture, mapping: VIDEO, local: translate(0, 0, 0.95), parent: 0 },
-  ...stripLocals.map(local => ({ mesh: planeMesh, texture: brickTexture, mapping: BUMP_MAPPING, local, parent: 0 })),
+  ...stripLocals.map(local => ({ mesh: planeMesh, texture: brickTexture, mapping: TRIPLANAR, local, parent: 0 })),
   { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [3.0, 0, 0] }
 ];
 
@@ -327,11 +382,14 @@ function render(time) {
   updateVideoTexture(tvVideo);
   const models = [];
   for (const { mesh, texture, mapping, offset, local, parent } of objects) {
-    const model = parent === undefined
-      ? multiply(translate(...offset), rotation)   // top-level: translate * rotation
-      : multiply(models[parent], local);           // child: parent's model * local transform
-    models.push(model);
-    gl.uniformMatrix4fv(uModelView, false, multiply(view, model));
+    // space: the matrix of the space the object sits in, which triplanar textures stay fixed to.
+    //   top-level object: its own model (translate * rotation), with an identity local
+    //   child: its parent's model, with its own local transform inside the parent
+    const space = parent === undefined ? multiply(translate(...offset), rotation) : models[parent];
+    const localMatrix = parent === undefined ? IDENTITY : local;
+    models.push(multiply(space, localMatrix));
+    gl.uniformMatrix4fv(uParentView, false, multiply(view, space));
+    gl.uniformMatrix4fv(uLocal, false, localMatrix);
     gl.uniform1i(uMapping, mapping);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.bindVertexArray(mesh.vao);
