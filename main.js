@@ -708,12 +708,34 @@ channelButton?.addEventListener("click", () => {
 });
 
 // Screens button: <button id="screensButton">Screens: spread</button> in index.html.
-// spread: one picture across all the screens; repeat: the whole picture on every screen.
-let spreadScreens = true;
+// Goes through these, for ch 1 to 3 (on ch 4 every screen makes its own choice):
+//   spread:         one picture across all the screens
+//   repeat:         the whole picture on every screen
+//   mix:            some screens spread, some repeat, picked at random
+//   spread shuffle: spread, but the screens' pieces of the picture swapped around at random
+const SCREEN_MODES = ["spread", "repeat", "mix", "spread shuffle"];
+let screenMode = 0;
+
+// Pick the random parts of mix and spread shuffle; done each time one of them comes on
+function arrangeScreens() {
+  for (const tv of tvs) tv.screenSpread = Math.random() < 0.5;
+
+  // A random order in which no screen keeps its own piece
+  const order = tvs.map((_, i) => i);
+  do {
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+  } while (order.some((k, i) => k === i));
+  tvs.forEach((tv, i) => tv.pieceOf = tvs[order[i]]);
+}
+
 const screensButton = document.getElementById("screensButton");
 screensButton?.addEventListener("click", () => {
-  spreadScreens = !spreadScreens;
-  screensButton.textContent = spreadScreens ? "Screens: spread" : "Screens: repeat";
+  screenMode = (screenMode + 1) % SCREEN_MODES.length;
+  if (SCREEN_MODES[screenMode] === "mix" || SCREEN_MODES[screenMode] === "spread shuffle") arrangeScreens();
+  screensButton.textContent = `Screens: ${SCREEN_MODES[screenMode]}`;
 });
 
 // Channel sound with the browser's Web Audio API: ch 1 plays the video's own sound, ch 2 white
@@ -880,13 +902,18 @@ function screenWall(tvs) {
 //   spread: one picture covers the whole wall, like a video wall, and this screen shows the
 //           part that falls on it
 //   repeat: this screen shows the whole picture, cropped to the screen's shape
-function screenCrop(tv, wall, pictureAspect, spread) {
+//   pieceOf: the screen whose place in the wall this one shows (itself, unless shuffled). The
+//            piece keeps this screen's own size and shape, so nothing stretches, and it's
+//            moved in if needed so it stays inside the wall.
+function screenCrop(tv, wall, pictureAspect, spread, pieceOf = tv) {
   const [sx, sy] = tv.screenHalf;
   if (!spread) return coverCrop(sx / sy, pictureAspect);
 
   const [x0, y0, x1, y1] = wall;
   const [u0, v0, u1, v1] = coverCrop((x1 - x0) / (y1 - y0), pictureAspect);
-  const [x, y] = tv.position;
+  const clamp = (value, lo, hi) => Math.min(Math.max(value, lo), hi);
+  const x = clamp(pieceOf.position[0], x0 + sx, x1 - sx);
+  const y = clamp(pieceOf.position[1], y0 + sy, y1 - sy);
   const u = px => u0 + (px - x0) / (x1 - x0) * (u1 - u0);
   const v = py => v0 + (py - y0) / (y1 - y0) * (v1 - v0);
   return [u(x - sx), v(y - sy), u(x + sx), v(y + sy)];
@@ -1007,7 +1034,10 @@ function render(time) {
   for (const tv of tvs) {
     const mixed = channel === 3;
     const pic = mixed ? picture(tv.mix.source, tv.mix.pattern) : picture(SOURCES[channel], testPattern);
-    tv.videoCrop = screenCrop(tv, wall, pic.aspect, mixed ? tv.mix.spread : spreadScreens);
+    const mode = SCREEN_MODES[screenMode];
+    const spread = mixed ? tv.mix.spread
+      : mode === "spread" || mode === "spread shuffle" || (mode === "mix" && tv.screenSpread);
+    tv.videoCrop = screenCrop(tv, wall, pic.aspect, spread, !mixed && mode === "spread shuffle" ? tv.pieceOf : tv);
     tv.draw(tvView, pic.texture);
   }
 
