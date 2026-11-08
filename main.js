@@ -293,6 +293,8 @@ function sphereMeshData(latRes, lonRes) {
   return { positions: sphPositions, normals: sphPositions, tangents, texCoords: sphUVs, indices: sphIndices };
 }
 const sphereMesh = createMesh(sphereMeshData(64, 64));
+const TORUS_MAJOR = 1.2, TORUS_MINOR = 0.38;   // ring radius and tube radius
+const torusMesh = createMesh(createTorus(64, 32, TORUS_MAJOR, TORUS_MINOR));
 
 // Upload an image into an existing texture. Set data for maps that hold numbers rather than
 // colors (normal and height maps), so the browser doesn't color-correct them. onLoad (which
@@ -415,6 +417,7 @@ function loadPresetMaterial(preset) {
 // All the folders load at the start, so switching is instant
 const presetMaterials = MATERIAL_PRESETS.map(preset => ({ name: preset.name, material: loadPresetMaterial(preset) }));
 const orangeMaterial = presetMaterials.find(p => p.name === "orange").material;
+const knittedMaterial = presetMaterials.find(p => p.name === "knitted").material;
 
 // Noise texture: TV snow rendered on the GPU into a 512x512 texture, new every frame
 // Render to texture: https://webglfundamentals.org/webgl/lessons/webgl-render-to-texture.html
@@ -883,6 +886,15 @@ const tvs = stackTVs([
   [16 / 9]       // top
 ]);
 
+// The imaginary ground plane: the height the bottom row of TVs stands on
+const GROUND_Y = Math.min(...tvs.map(tv => tv.position[1] - tv.half[1]));
+
+// Where the other objects sit, in the fixed camera's world (the camera looks at the origin
+// from CAMERA_DISTANCE in front)
+const SPHERE_CENTER = [-7, 4, -14], SPHERE_RADIUS = 6;   // upper left, further back
+const CYLINDER_CENTER = [3.2, -1, 6];                     // right, close to the camera
+const TORUS_CENTER = [-1.6, GROUND_Y + TORUS_MINOR, 2.2]; // lying on the ground in front of the screens, a little left
+
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
 const projection = perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
@@ -890,7 +902,7 @@ const lightWorld = [3, 4, 5];
 
 // Interactive controls. The camera stays put; the controls move the objects:
 //   mouse drag and arrow keys / w, s: the TV stack only
-//   slider, axis dropdown and Start/Stop: the ball and the cylinder only
+//   slider, axis dropdown and Start/Stop: the ball, the cylinder and the torus only
 const CAMERA_DISTANCE = 13;             // the fixed camera sits this far in front of the origin
 let dragRotX = 0, dragRotY = -0.5;      // mouse drag: turns the TV stack about its center
 let camX = 0, camY = 0, camZ = -13;     // arrow keys, w, s: move the TV stack (starts in its usual place)
@@ -948,7 +960,7 @@ function render(time) {
 
   // TVs: the mouse drag turns the stack about its center, the keys move it
   const tvView = multiply(translate(camX, camY, camZ), multiply(rotateY(dragRotY), rotateX(dragRotX)));
-  // Ball and cylinder: the slider, axis and Start/Stop turn each one about its own center
+  // Ball, cylinder and torus: the slider, axis and Start/Stop turn each one about its own center
   const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
 
   gl.activeTexture(gl.TEXTURE0);
@@ -958,17 +970,22 @@ function render(time) {
   layoutScreens(tvs, source.aspect, spreadScreens);   // cheap; redone each frame, so it follows the picture and TV positions
   for (const tv of tvs) tv.draw(tvView, source.texture);
 
-  // Big orange sphere behind the TVs. It uses the same triplanar mapping as the TVs, with the
-  // radius in its local matrix, so the peel's dimples come out the same size as on a TV.
-  const SPHERE_CENTER = [0, 0, -9], SPHERE_RADIUS = 6;
+  // Big orange sphere. It uses the same triplanar mapping as the TVs, with the radius in its
+  // local matrix, so the peel's dimples come out the same size as on a TV.
   gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(...SPHERE_CENTER), axisRotation)));
   bindMaterial(orangeMaterial);
   drawMesh(sphereMesh, TRIPLANAR, scaleMatrix(SPHERE_RADIUS, SPHERE_RADIUS, SPHERE_RADIUS));
 
   // Cylinder
-  gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(4.5, 0, 0), axisRotation)));   // beside the stack
+  gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(...CYLINDER_CENTER), axisRotation)));
   gl.bindTexture(gl.TEXTURE_2D, normalTexture);
   drawMesh(cylinderMesh, NORMAL_MAPPING, IDENTITY);
+
+  // Torus in the knitted fabric, built at its real size, so the triplanar weave matches the TVs'.
+  // Like the ball and cylinder, the slider, axis and Start/Stop turn it about its own center.
+  gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(...TORUS_CENTER), axisRotation)));
+  bindMaterial(knittedMaterial);
+  drawMesh(torusMesh, TRIPLANAR, IDENTITY);
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
