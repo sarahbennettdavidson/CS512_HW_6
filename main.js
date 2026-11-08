@@ -55,6 +55,7 @@ uniform sampler2D uTexture;
 uniform highp mat4 uParentView;  // highp to match the vertex shader, or the program won't link
 uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = video (unlit), 3 = triplanar material
 uniform vec4 uVideoCrop;  // part of the video frame shown on a screen: (u0, v0, u1, v1)
+uniform ivec3 uScreenOrient;  // x: 1 = upside down, y: 1 = mirrored left to right, z: quarter turns (0 to 3)
 
 // Material maps for triplanar mode (uTexture is the color map). uHasNormal and uHasHeight say
 // which of the other two the material has.
@@ -122,7 +123,15 @@ void project(vec2 uv, vec3 T, vec3 B, float w, inout vec3 color, inout vec3 slop
 void main() {
   // Video: the screen gives off its own light, so show the frame as is with no shading
   if (uMapping == 2) {
-    vec2 uv = mix(uVideoCrop.xy, uVideoCrop.zw, vTexCoord);
+    // Orient the picture: a flip runs a coordinate the other way (0.2..0.6 becomes 0.6..0.2),
+    // and a quarter turn swaps the two coordinates
+    vec2 t = vTexCoord;
+    if (uScreenOrient.y == 1) t.x = 1.0 - t.x;
+    if (uScreenOrient.x == 1) t.y = 1.0 - t.y;
+    if (uScreenOrient.z == 1) t = vec2(t.y, 1.0 - t.x);
+    else if (uScreenOrient.z == 2) t = 1.0 - t;
+    else if (uScreenOrient.z == 3) t = vec2(1.0 - t.y, t.x);
+    vec2 uv = mix(uVideoCrop.xy, uVideoCrop.zw, t);
     fragColor = vec4(texture(uTexture, uv).rgb, 1.0);
     return;
   }
@@ -219,7 +228,7 @@ const shaderError = document.getElementById("shaderError");
 vertEditor.value = VERTEX_SHADER;
 fragEditor.value = FRAGMENT_SHADER;
 
-let program, uParentView, uLocal, uProjection, uLightPos, uMapping, uVideoCrop, uMaterial;
+let program, uParentView, uLocal, uProjection, uLightPos, uMapping, uVideoCrop, uScreenOrient, uMaterial;
 
 // Texture unit for each material map; the color map shares unit 0 with the video and cylinder
 const MAP_UNITS = { color: 0, normal: 1, height: 2 };
@@ -237,6 +246,7 @@ function updateProgram() {
     uLightPos = gl.getUniformLocation(program, "uLightPos");
     uMapping = gl.getUniformLocation(program, "uMapping");
     uVideoCrop = gl.getUniformLocation(program, "uVideoCrop");
+    uScreenOrient = gl.getUniformLocation(program, "uScreenOrient");
     uMaterial = Object.fromEntries(MATERIAL_UNIFORMS.map(name => [name, gl.getUniformLocation(program, name)]));
     gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
     gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), MAP_UNITS.normal);
@@ -758,6 +768,40 @@ screensButton?.addEventListener("click", () => {
   screensButton.textContent = `Screens: ${SCREEN_MODES[screenMode]}`;
 });
 
+// Orientation shuffles for the pictures on the screens, each switched on or off by itself:
+//   x: some screens upside down (flipped around the x axis)
+//   y: some screens mirrored left to right (flipped around the y axis)
+//   z: every screen turned a random number of quarter turns (around the z axis)
+// Which screens get what is picked at random each time a shuffle is switched on.
+// In index.html: <select id="shuffleAxis"> (x, y, z) and <button id="shuffleButton">.
+const shuffleOn = { x: false, y: false, z: false };
+
+function pickOrientations(axis) {
+  for (const tv of tvs) {
+    if (axis === "x") tv.flipX = Math.random() < 0.5;
+    if (axis === "y") tv.flipY = Math.random() < 0.5;
+    if (axis === "z") tv.quarterTurns = Math.floor(Math.random() * 4);
+  }
+}
+
+const shuffleAxis = document.getElementById("shuffleAxis");
+const shuffleButton = document.getElementById("shuffleButton");
+// The button shows whether the shuffle picked in the dropdown is on
+const showShuffle = () => {
+  if (shuffleButton && shuffleAxis) {
+    const axis = shuffleAxis.value;
+    shuffleButton.textContent = `Shuffle ${axis.toUpperCase()}: ${shuffleOn[axis] ? "on" : "off"}`;
+  }
+};
+shuffleAxis?.addEventListener("change", showShuffle);
+shuffleButton?.addEventListener("click", () => {
+  const axis = shuffleAxis.value;
+  shuffleOn[axis] = !shuffleOn[axis];
+  if (shuffleOn[axis]) pickOrientations(axis);
+  showShuffle();
+});
+showShuffle();
+
 // Channel sound with the browser's Web Audio API: ch 1 plays the video's own sound, ch 2 white
 // noise, ch 3 a 1000 Hz test tone. The tone and noise run all the time; their volumes are
 // turned up or down. The audio is created on the first click, because browsers only start
@@ -840,6 +884,8 @@ class TV {
     this.depth = depth;              // how far the inner walls run back, relative to size
     this.material = presetMaterials[0].material;   // body material (starts on plastic); reassign at any time
     this.turn = 0;                   // turn about its vertical axis, in radians (set by stackTVs)
+    this.flipX = false; this.flipY = false; this.quarterTurns = 0;   // picked by the orientation shuffles
+    this.orient = [0, 0, 0];          // the orientation the screen uses this frame
     this.videoCrop = [0, 0, 1, 1];   // part of the picture shown on the screen: u0, v0, u1, v1 (set each frame in render)
     this.build();
   }
@@ -912,6 +958,7 @@ class TV {
 
     gl.bindTexture(gl.TEXTURE_2D, screenTexture);
     gl.uniform4fv(uVideoCrop, this.videoCrop);
+    gl.uniform3i(uScreenOrient, ...this.orient);
     drawMesh(this.screenMesh, VIDEO, this.screenLocal);
   }
 }
@@ -940,8 +987,10 @@ function screenWall(tvs) {
 //   pieceOf: the screen whose place in the wall this one shows (itself, unless shuffled). The
 //            piece keeps this screen's own size and shape, so nothing stretches, and it's
 //            moved in if needed so it stays inside the wall.
-function screenCrop(tv, wall, pictureAspect, spread, pieceOf = tv) {
-  const [sx, sy] = tv.screenHalf;
+//   turned:  the picture is turned a quarter (or three quarters) on this screen, so the piece
+//            is taken the other way round (tall instead of wide), so nothing stretches
+function screenCrop(tv, wall, pictureAspect, spread, pieceOf = tv, turned = false) {
+  const [sx, sy] = turned ? [tv.screenHalf[1], tv.screenHalf[0]] : tv.screenHalf;
   if (!spread) return coverCrop(sx / sy, pictureAspect);
 
   const [x0, y0, x1, y1] = wall;
@@ -1091,7 +1140,10 @@ function render(time) {
     const mode = SCREEN_MODES[screenMode];
     const spread = mixed ? tv.mix.spread
       : mode === "spread" || mode === "spread shuffle" || (mode === "mix" && tv.screenSpread);
-    tv.videoCrop = screenCrop(tv, wall, pic.aspect, spread, !mixed && mode === "spread shuffle" ? tv.pieceOf : tv);
+    // Orientation shuffles that are switched on: [upside down, mirrored, quarter turns]
+    tv.orient = [shuffleOn.x && tv.flipX ? 1 : 0, shuffleOn.y && tv.flipY ? 1 : 0, shuffleOn.z ? tv.quarterTurns : 0];
+    tv.videoCrop = screenCrop(tv, wall, pic.aspect, spread, !mixed && mode === "spread shuffle" ? tv.pieceOf : tv,
+                              tv.orient[2] % 2 === 1);
     tv.draw(tvView, pic.texture);
   }
 
