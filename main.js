@@ -315,7 +315,7 @@ function drawMesh(mesh, mapping, local) {
 //
 // size is the box's half-height and aspect is the screen opening's width / height;
 // the box is as wide as the opening plus the border on each side. border and depth
-// are relative to size. The TV's own space is translate(position) * rotation, and every
+// are relative to size. The TV's own space is translate(position), and every
 // part is built in real units inside it, so triplanar bricks stay the same size on all TVs.
 class TV {
   constructor({ position = [0, 0, 0], size = 1, aspect = 1, border = 0.2, depth = 0.5 } = {}) {
@@ -336,6 +336,7 @@ class TV {
     const iy = this.size - b;              // opening half-height
     const ix = iy * this.aspect;           // opening half-width
     const hx = ix + b, hy = this.size, hz = this.size;   // box half-extents
+    this.half = [hx, hy, hz];
 
     // Body: the -1..1 open cube scaled to the box
     this.parts = [{ mesh: openCubeMesh, local: scaleMatrix(hx, hy, hz) }];
@@ -373,8 +374,8 @@ class TV {
     this.screenLocal = translate(0, 0, hz - margin);
   }
 
-  draw(view, rotation) {
-    const space = multiply(translate(...this.position), rotation);
+  draw(view) {
+    const space = translate(...this.position);
     gl.uniformMatrix4fv(uParentView, false, multiply(view, space));
 
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -410,21 +411,43 @@ function layoutVideoWall(tvs, video) {
   });
 }
 
-// Each TV spins about its own center, so the centers are kept at least the sum of the two
-// boxes' corner-to-center distances apart (1.41 + 1.91 = 3.32) so they never pass through each other
-const tvs = [
-  new TV({ position: [0, 0, 0] }),
-  new TV({ position: [-3.4, 0, 0], aspect: 16 / 9 })
-];
+// Stack TVs in rows from the bottom up. Each row lists its TVs' aspects from left to right;
+// rows are centered on x = 0 and sit on top of each other, and the whole stack is centered
+// on the origin so the camera orbits around its middle.
+function stackTVs(rows, gap = 0.05) {
+  const built = rows.map(aspects => aspects.map(aspect => new TV({ aspect })));
+  const rowHeights = built.map(row => Math.max(...row.map(tv => 2 * tv.half[1])));
+  const stackHeight = rowHeights.reduce((a, b) => a + b, 0) + gap * (rows.length - 1);
+
+  let y = -stackHeight / 2;                 // bottom of the current row
+  built.forEach((row, r) => {
+    const widths = row.map(tv => 2 * tv.half[0]);
+    const rowWidth = widths.reduce((a, b) => a + b, 0) + gap * (row.length - 1);
+    let x = -rowWidth / 2;                  // left edge of the next TV
+    row.forEach((tv, i) => {
+      tv.position = [x + widths[i] / 2, y + tv.half[1], 0];
+      x += widths[i] + gap;
+    });
+    y += rowHeights[r] + gap;
+  });
+  return built.flat();
+}
+
+const tvs = stackTVs([
+  [16 / 9, 1],   // bottom
+  [1, 16 / 9],
+  [16 / 9, 1],
+  [16 / 9]       // top
+]);
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
 const projection = perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
 const lightWorld = [3, 4, 5];
 
-// Interactive controls
+// Interactive controls: the drag, slider and spin all orbit the camera around the world origin
 let dragRotX = 0, dragRotY = -0.5;      // mouse drag
-let camX = 0, camY = 0, camZ = -7;      // arrow keys, w, s
+let camX = 0, camY = 0, camZ = -13;     // arrow keys, w, s; far enough back to see the whole stack
 let sliderAngle = 0;                    // degrees
 let spinning = false, spinAngle = 0;    // Start/Stop button
 
@@ -468,21 +491,22 @@ function render(time) {
   lastTime = t;
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  const view = translate(camX, camY, camZ);
-  gl.uniformMatrix4fv(uProjection, false, projection);
-  gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
-
+  // Camera: rotate the whole world about its origin, then move it in front of the camera.
+  // Every object and the light go through the same view, so they all turn together.
   const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
+  const view = multiply(translate(camX, camY, camZ), rotation);
+  gl.uniformMatrix4fv(uProjection, false, projection);
+  gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
 
   gl.activeTexture(gl.TEXTURE0);
   updateVideoTexture(tvVideo);
 
   layoutVideoWall(tvs, tvVideo.video);   // cheap; redone each frame so it follows the video size and TV positions
-  for (const tv of tvs) tv.draw(view, rotation);
+  for (const tv of tvs) tv.draw(view);
 
   // Cylinder
-  gl.uniformMatrix4fv(uParentView, false, multiply(view, multiply(translate(3.0, 0, 0), rotation)));
+  gl.uniformMatrix4fv(uParentView, false, multiply(view, translate(4.5, 0, 0)));   // beside the stack
   gl.bindTexture(gl.TEXTURE_2D, normalTexture);
   drawMesh(cylinderMesh, NORMAL_MAPPING, IDENTITY);
   requestAnimationFrame(render);
