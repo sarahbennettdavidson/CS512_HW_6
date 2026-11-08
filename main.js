@@ -238,8 +238,6 @@ function scaleMatrix(sx, sy, sz) {
 const openCubeMesh = createMesh(createOpenCube());
 const planeMesh = createMesh(createPlane());
 const cylinderMesh = createMesh(createCylinder());
-// Create your TV screen mesh (e.g., 20x20 resolution, 0.5 height bulge)
-const tvScreenMesh = createMesh(createTvScreen(30, 30, 2.0, 1.5, 3.0));
 
 // Upload an image into an existing texture. Reusing the same texture object means
 // everything that draws with it picks up the new image without changing any references.
@@ -315,45 +313,64 @@ function drawMesh(mesh, mapping, local) {
 // A TV: an open brick box with a border around the opening, inner walls running back
 // from the border, and a curved video screen just behind the opening.
 //
-// The TV's own space is translate(position) * rotation. The size is built into each
-// part's local matrix rather than into that space, so triplanar mapping measures in
-// real units and the bricks stay the same size on TVs of any size.
+// size is the box's half-height and aspect is the screen opening's width / height;
+// the box is as wide as the opening plus the border on each side. border and depth
+// are relative to size. The TV's own space is translate(position) * rotation, and every
+// part is built in real units inside it, so triplanar bricks stay the same size on all TVs.
 class TV {
-  constructor({ position = [0, 0, 0], size = 1, border = 0.2, depth = 0.5 } = {}) {
+  constructor({ position = [0, 0, 0], size = 1, aspect = 1, border = 0.2, depth = 0.5 } = {}) {
     this.position = position;
     this.size = size;
-    this.border = border;            // width of the border strips (before size)
-    this.depth = depth;              // how far the inner walls run back (before size)
+    this.aspect = aspect;
+    this.border = border;            // width of the border strips, relative to size
+    this.depth = depth;              // how far the inner walls run back, relative to size
     this.texture = brickTexture;     // body texture; reassign at any time
-    this.videoCrop = [0, 0, 1, 1];   // part of the video frame shown: u0, v0, u1, v1
+    this.videoCrop = [0, 0, 1, 1];   // part of the video frame shown: u0, v0, u1, v1 (set by layoutVideoWall)
     this.build();
   }
 
-  // Work out every part's local matrix; call again after changing size, border or depth
+  // Work out every part; call again after changing size, aspect, border or depth
   build() {
-    const S = scaleMatrix(this.size, this.size, this.size);
-    const inner = 1 - this.border;   // inner edge of the border
-    this.parts = [{ mesh: openCubeMesh, local: S }];
+    const b = this.border * this.size;     // border width
+    const d = this.depth * this.size;      // inner wall depth
+    const iy = this.size - b;              // opening half-height
+    const ix = iy * this.aspect;           // opening half-width
+    const hx = ix + b, hy = this.size, hz = this.size;   // box half-extents
+
+    // Body: the -1..1 open cube scaled to the box
+    this.parts = [{ mesh: openCubeMesh, local: scaleMatrix(hx, hy, hz) }];
 
     for (let k = 0; k < 4; k++) {
-      const side = multiply(S, rotateZ(k * Math.PI / 2));   // k = 0 top, 1 left, 2 bottom, 3 right
+      const side = rotateZ(k * Math.PI / 2);        // k = 0 top, 1 left, 2 bottom, 3 right
+      const horizontal = k % 2 === 0;               // top and bottom run along x
+      const along = horizontal ? hx : hy;           // half-length of the box edge this side runs along
+      const reach = horizontal ? hy : hx;           // distance from the center to that edge
+      const innerAlong = horizontal ? ix : iy;      // same two, for the opening
+      const innerReach = horizontal ? iy : ix;
 
-      // Border strip: scale to (2 - border) x border, move to the top edge at z = 1.
-      // Shifted by -border/2 in x so the four strips tile the corners without overlapping.
+      // Border strip: scale to (2 * along - b) x b, move to the edge at the front (z = hz).
+      // Shifted by -b/2 along the strip so the four strips tile the corners without overlapping.
       this.parts.push({ mesh: planeMesh, local: multiply(side,
-        multiply(translate(-this.border / 2, 1 - this.border / 2, 1),
-          scaleMatrix(2 - this.border, this.border, 1))) });
+        multiply(translate(-b / 2, reach - b / 2, hz),
+          scaleMatrix(2 * along - b, b, 1))) });
 
-      // Inner wall: scale to (2 * inner) x depth, rotate 90 degrees about x so it stands
-      // perpendicular to the border facing -y, then move it to the border's inner edge,
-      // running from z = 1 back to z = 1 - depth.
+      // Inner wall: scale to (2 * innerAlong) x d, rotate 90 degrees about x so it stands
+      // perpendicular to the border facing the center, then move it to the opening's edge,
+      // running from z = hz back to z = hz - d.
       this.parts.push({ mesh: planeMesh, local: multiply(side,
-        multiply(translate(0, inner, 1 - this.depth / 2),
-          multiply(rotateX(Math.PI / 2), scaleMatrix(2 * inner, this.depth, 1)))) });
+        multiply(translate(0, innerReach, hz - d / 2),
+          multiply(rotateX(Math.PI / 2), scaleMatrix(2 * innerAlong, d, 1)))) });
     }
 
-    // Screen's front-most point is its center (local z = 0); put it 0.05 behind the open face at z = 1
-    this.screenLocal = multiply(S, translate(0, 0, 0.95));
+    // Screen: a little larger than the opening so its edges tuck behind the inner walls.
+    // createTvScreen takes arc lengths; asin turns the half-widths we want into them.
+    const margin = 0.05 * this.size;
+    const sx = ix + margin, sy = iy + margin;     // screen half-extents (straight across)
+    const R = 3 * Math.max(hx, hy);               // curvature radius grows with the TV
+    this.screenHalf = [sx, sy];
+    this.screenMesh = createMesh(createTvScreen(30, 30, 2 * R * Math.asin(sx / R), 2 * R * Math.asin(sy / R), R));
+    // Screen's front-most point is its center (local z = 0); put it just behind the opening
+    this.screenLocal = translate(0, 0, hz - margin);
   }
 
   draw(view, rotation) {
@@ -365,11 +382,40 @@ class TV {
 
     gl.bindTexture(gl.TEXTURE_2D, tvVideo.texture);
     gl.uniform4fv(uVideoCrop, this.videoCrop);
-    drawMesh(tvScreenMesh, VIDEO, this.screenLocal);
+    drawMesh(this.screenMesh, VIDEO, this.screenLocal);
   }
 }
 
-const tvs = [new TV({ position: [0, 0, 0] })];
+// Spread the shared video across all the screens like a video wall: each TV shows the part
+// of the frame that falls on its screen, based on the TVs' positions. The frame covers the
+// screens' bounding box without stretching; whatever sticks out past it is cropped evenly.
+function layoutVideoWall(tvs, video) {
+  const rects = tvs.map(({ position: [x, y], screenHalf: [sx, sy] }) => [x - sx, y - sy, x + sx, y + sy]);
+  const x0 = Math.min(...rects.map(r => r[0])), y0 = Math.min(...rects.map(r => r[1]));
+  const x1 = Math.max(...rects.map(r => r[2])), y1 = Math.max(...rects.map(r => r[3]));
+
+  // Part of the frame the whole wall uses, centered
+  const wallAspect = (x1 - x0) / (y1 - y0);
+  const videoAspect = video.videoWidth ? video.videoWidth / video.videoHeight : wallAspect;
+  const uSpan = Math.min(1, wallAspect / videoAspect);
+  const vSpan = Math.min(1, videoAspect / wallAspect);
+  const u0 = (1 - uSpan) / 2, v0 = (1 - vSpan) / 2;
+
+  tvs.forEach((tv, i) => {
+    const [a, b, c, d] = rects[i];
+    tv.videoCrop = [
+      u0 + (a - x0) / (x1 - x0) * uSpan, v0 + (b - y0) / (y1 - y0) * vSpan,
+      u0 + (c - x0) / (x1 - x0) * uSpan, v0 + (d - y0) / (y1 - y0) * vSpan
+    ];
+  });
+}
+
+// Each TV spins about its own center, so the centers are kept at least the sum of the two
+// boxes' corner-to-center distances apart (1.41 + 1.91 = 3.32) so they never pass through each other
+const tvs = [
+  new TV({ position: [0, 0, 0] }),
+  new TV({ position: [-3.4, 0, 0], aspect: 16 / 9 })
+];
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
@@ -432,6 +478,7 @@ function render(time) {
   gl.activeTexture(gl.TEXTURE0);
   updateVideoTexture(tvVideo);
 
+  layoutVideoWall(tvs, tvVideo.video);   // cheap; redone each frame so it follows the video size and TV positions
   for (const tv of tvs) tv.draw(view, rotation);
 
   // Cylinder
