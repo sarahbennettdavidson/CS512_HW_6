@@ -18,7 +18,7 @@ void main() {
 // GLSL has no Math.random, so the random sky tint is worked out here in JavaScript and written
 // into the shader text with \${...}. toFixed(3) always gives a decimal point (e.g. 0.247),
 // which GLSL needs for a float.
-const skyTint = base => (base + Math.random() * 0.1).toFixed(3);
+const skyTint = base => (base + Math.random() * 0.5).toFixed(3);
 
 const CLOUDS_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
