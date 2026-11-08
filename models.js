@@ -209,3 +209,40 @@ const spherePos = sphere.sphPositions;
 const sphereColors = sphere.sphColors;
 const sphereIndices = sphere.sphIndices;
 const sphereUVs = sphere.sphUVs;
+
+// Torus lying flat (its hole points along y), centered at the origin.
+// majorRadius: from the center to the middle of the tube; minorRadius: the tube's radius.
+// u runs around the big ring, v around the tube.
+function createTorus(majorSegments = 64, minorSegments = 32, majorRadius = 1, minorRadius = 0.35) {
+  const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
+
+  for (let i = 0; i <= majorSegments; i++) {
+    const u = i / majorSegments, theta = 2 * Math.PI * u;   // around the big ring
+    const ct = Math.cos(theta), st = Math.sin(theta);
+    for (let j = 0; j <= minorSegments; j++) {
+      const v = j / minorSegments, phi = 2 * Math.PI * v;   // around the tube
+      const cp = Math.cos(phi), sp = Math.sin(phi);
+      const ring = majorRadius + minorRadius * cp;          // distance from the y axis
+      positions.push(ring * ct, minorRadius * sp, ring * st);
+      normals.push(cp * ct, sp, cp * st);                   // out from the middle of the tube
+      tangents.push(-st, 0, ct);                            // the way u grows, around the big ring
+      texCoords.push(u, v);
+    }
+  }
+
+  for (let i = 0; i < majorSegments; i++) {
+    for (let j = 0; j < minorSegments; j++) {
+      const a = i * (minorSegments + 1) + j;   // this ring
+      const b = a + minorSegments + 1;         // next ring around
+      indices.push(a, a + 1, b,   a + 1, b + 1, b);   // counter-clockwise seen from outside
+    }
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    tangents: new Float32Array(tangents),
+    texCoords: new Float32Array(texCoords),
+    indices: new Uint16Array(indices)
+  };
+}
