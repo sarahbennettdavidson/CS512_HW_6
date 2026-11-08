@@ -4,8 +4,8 @@
 // Shadertoy shaders are licensed CC BY-NC-SA 3.0 unless the author says otherwise:
 // https://creativecommons.org/licenses/by-nc-sa/3.0/
 // Changes: wrapped for WebGL2 (version and precision lines, the iResolution and iTime uniforms
-// Shadertoy normally provides, and a main() that calls mainImage), and the two sky colours get a
-// small random tint on each page load.
+// Shadertoy normally provides, and a main() that calls mainImage), the two sky colours get a
+// small random tint on each page load, and so do the clouds (less red and green).
 
 const CLOUDS_VERTEX_SHADER = `#version 300 es
 in vec3 aPosition;
@@ -19,6 +19,8 @@ void main() {
 // into the shader text with \${...}. toFixed(3) always gives a decimal point (e.g. 0.247),
 // which GLSL needs for a float.
 const skyTint = base => (base + Math.random() * 0.5).toFixed(3);
+// Taken off the clouds' red and green, 0 to 0.2, so some loads have bluer clouds
+const cloudTint = (Math.random() * 0.2).toFixed(3);
 
 const CLOUDS_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
@@ -35,6 +37,7 @@ const float cloudalpha = 8.0;
 const float skytint = 0.5;
 const vec3 skycolour1 = vec3(${skyTint(0.2)}, ${skyTint(0.4)}, ${skyTint(0.6)});   // random tint, picked in JavaScript on each page load
 const vec3 skycolour2 = vec3(${skyTint(0.4)}, ${skyTint(0.7)}, 1.0);
+const float cloudtint = ${cloudTint};   // random, picked in JavaScript on each page load
 
 const mat2 m = mat2( 1.6,  1.2, -1.2,  1.6 );
 
@@ -128,7 +131,7 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord ) {
     c += c1;
     
     vec3 skycolour = mix(skycolour2, skycolour1, p.y);
-    vec3 cloudcolour = vec3(1.1, 1.1, 0.9) * clamp((clouddark + cloudlight*c), 0.0, 1.0);
+    vec3 cloudcolour = (vec3(1.3, 1.3, 0.9) - vec3(cloudtint, cloudtint, 0.0)) * clamp((clouddark + cloudlight*c), 0.0, 1.0);
    
     f = cloudcover + cloudalpha*f*r;
     
