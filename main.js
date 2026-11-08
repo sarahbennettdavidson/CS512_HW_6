@@ -46,13 +46,22 @@ in vec3 vObjNormal;
 uniform vec3 uLightPos;
 uniform sampler2D uTexture;
 uniform highp mat4 uParentView;  // highp to match the vertex shader, or the program won't link
-uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = video (unlit), 3 = triplanar bump mapping
+uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = video (unlit), 3 = triplanar material
 uniform vec4 uVideoCrop;  // part of the video frame shown on a screen: (u0, v0, u1, v1)
+
+// Material maps for triplanar mode (uTexture is the color map). uHasNormal and uHasHeight say
+// which of the other two the material has.
+uniform sampler2D uNormalMap;     // tangent-space normals, OpenGL style (green points up); flat if missing
+uniform sampler2D uHeightMap;     // heights in red; if missing (and no normal map), the color's darkness is used
+uniform int uHasNormal, uHasHeight;
+uniform float uNormalStrength;    // 1 = the normal map as it is
+uniform float uHeightDepth;       // how deep the height map's full range is, in world units
 
 out vec4 fragColor;
 
 const float bumpScale = 3.0;
 const float triScale = 0.5;   // texture copies per unit; 0.5 = one copy per 2-unit cube face
+const vec3 LUMA = vec3(0.299, 0.587, 0.114);
 
 // convert RGB to luminance (Rec._601 standard, https://en.wikipedia.org/wiki/Rec._601)
 // or you can use a height map texture
@@ -67,6 +76,40 @@ vec2 heightSlope(vec2 uv) {
   float dhdu = (height(uv + vec2(texel.x, 0.0)) - height(uv - vec2(texel.x, 0.0))) * 0.5;
   float dhdv = (height(uv + vec2(0.0, texel.y)) - height(uv - vec2(0.0, texel.y))) * 0.5;
   return vec2(dhdu, dhdv);
+}
+
+// Height map slope per unit of uv. Displacement maps are often 16-bit with a narrow range, and the
+// browser reduces them to 8 bits, leaving only a few levels; one-texel differences of those would
+// show as steps. So this reads a blurrier mip level (bias 2) and measures 4 texels each way.
+vec2 heightMapSlope(vec2 uv) {
+  vec2 d = 4.0 / vec2(textureSize(uHeightMap, 0));
+  float hu = texture(uHeightMap, uv + vec2(d.x, 0.0), 2.0).r - texture(uHeightMap, uv - vec2(d.x, 0.0), 2.0).r;
+  float hv = texture(uHeightMap, uv + vec2(0.0, d.y), 2.0).r - texture(uHeightMap, uv - vec2(0.0, d.y), 2.0).r;
+  return vec2(hu / (2.0 * d.x), hv / (2.0 * d.y));
+}
+
+// Slope of the color map's darkness per unit of uv, for materials with no height or normal map
+vec2 luminanceSlope(vec2 uv) {
+  vec2 t = 1.0 / vec2(textureSize(uTexture, 0));
+  float hu = dot(texture(uTexture, uv - vec2(t.x, 0.0)).rgb - texture(uTexture, uv + vec2(t.x, 0.0)).rgb, LUMA);
+  float hv = dot(texture(uTexture, uv - vec2(0.0, t.y)).rgb - texture(uTexture, uv + vec2(0.0, t.y)).rgb, LUMA);
+  return vec2(hu / (2.0 * t.x), hv / (2.0 * t.y));
+}
+
+// Add one projector's share (weight w) of the material at uv. T and B are the directions in the
+// parent's space that the texture's u and v run along for this projector. The surface's slope is
+// collected as a 3D vector along T and B, which blends correctly between projectors.
+void project(vec2 uv, vec3 T, vec3 B, float w, inout vec3 color, inout vec3 slope) {
+  color += w * texture(uTexture, uv).rgb;
+
+  vec2 s = vec2(0.0);   // (dh/du, dh/dv): how much the surface rises along u and along v
+  if (uHasNormal == 1) {
+    vec3 n = texture(uNormalMap, uv).rgb * 2.0 - 1.0;
+    s += uNormalStrength * -n.xy / max(n.z, 0.2);   // a normal (-dh/du, -dh/dv, 1), back to slopes
+  }
+  if (uHasHeight == 1) s += uHeightDepth * triScale * heightMapSlope(uv);
+  else if (uHasNormal == 0) s += uHeightDepth * triScale * luminanceSlope(uv);
+  slope += w * (s.x * T + s.y * B);
 }
 
 void main() {
@@ -92,29 +135,15 @@ void main() {
     vec2 uvY = p.xz;   // T = +x, B = +z
     vec2 uvZ = p.xy;   // T = +x, B = +y
 
-    // Blend the colors, and the height slopes as 3D vectors along each projector's T and B.
-    // Axis-aligned faces have one weight of 1 and two of 0, so only one projector is sampled.
-    vec3 color = vec3(0.0);
-    vec3 g = vec3(0.0);
-    if (w.x > 0.001) {
-      vec2 s = heightSlope(uvX);
-      color += w.x * texture(uTexture, uvX).rgb;
-      g += w.x * (s.x * vec3(0.0, 0.0, 1.0) + s.y * vec3(0.0, 1.0, 0.0));
-    }
-    if (w.y > 0.001) {
-      vec2 s = heightSlope(uvY);
-      color += w.y * texture(uTexture, uvY).rgb;
-      g += w.y * (s.x * vec3(1.0, 0.0, 0.0) + s.y * vec3(0.0, 0.0, 1.0));
-    }
-    if (w.z > 0.001) {
-      vec2 s = heightSlope(uvZ);
-      color += w.z * texture(uTexture, uvZ).rgb;
-      g += w.z * (s.x * vec3(1.0, 0.0, 0.0) + s.y * vec3(0.0, 1.0, 0.0));
-    }
+    // Axis-aligned faces have one weight of 1 and two of 0, so only one projector is sampled
+    vec3 color = vec3(0.0), slope = vec3(0.0);
+    if (w.x > 0.001) project(uvX, vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), w.x, color, slope);
+    if (w.y > 0.001) project(uvY, vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), w.y, color, slope);
+    if (w.z > 0.001) project(uvZ, vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), w.z, color, slope);
 
     baseColor = color;
     // Tilt the normal against the slope, then bring it from the parent's space to eye space
-    N = normalize(mat3(uParentView) * (No - bumpScale * g));
+    N = normalize(mat3(uParentView) * (No - slope));
   } else {
     // Tangent frame (T, B, N) from the mesh
     vec3 Ng = normalize(vNormal);
@@ -183,7 +212,11 @@ const shaderError = document.getElementById("shaderError");
 vertEditor.value = VERTEX_SHADER;
 fragEditor.value = FRAGMENT_SHADER;
 
-let program, uParentView, uLocal, uProjection, uLightPos, uMapping, uVideoCrop;
+let program, uParentView, uLocal, uProjection, uLightPos, uMapping, uVideoCrop, uMaterial;
+
+// Texture unit for each material map; the color map shares unit 0 with the video and cylinder
+const MAP_UNITS = { color: 0, normal: 1, height: 2 };
+const MATERIAL_UNIFORMS = ["uHasNormal", "uHasHeight", "uNormalStrength", "uHeightDepth"];
 
 function updateProgram() {
   try {
@@ -197,7 +230,10 @@ function updateProgram() {
     uLightPos = gl.getUniformLocation(program, "uLightPos");
     uMapping = gl.getUniformLocation(program, "uMapping");
     uVideoCrop = gl.getUniformLocation(program, "uVideoCrop");
+    uMaterial = Object.fromEntries(MATERIAL_UNIFORMS.map(name => [name, gl.getUniformLocation(program, name)]));
     gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
+    gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), MAP_UNITS.normal);
+    gl.uniform1i(gl.getUniformLocation(program, "uHeightMap"), MAP_UNITS.height);
     shaderError.textContent = "";
   } catch (e) {
     shaderError.textContent = e.message.replace(/\0/g, "");
@@ -239,40 +275,225 @@ const openCubeMesh = createMesh(createOpenCube());
 const planeMesh = createMesh(createPlane());
 const cylinderMesh = createMesh(createCylinder());
 
-// Upload an image into an existing texture. Reusing the same texture object means
-// everything that draws with it picks up the new image without changing any references.
-function setTextureImage(texture, url) {
+// Upload an image into an existing texture. Set data for maps that hold numbers rather than
+// colors (normal and height maps), so the browser doesn't color-correct them. onLoad and
+// onError are optional callbacks.
+function setTextureImage(texture, url, data = false, onLoad = () => {}, onError = () => {}) {
   const image = new Image();
+  image.onerror = onError;
   image.onload = () => {
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);  // images start at the top row, texture coordinates at the bottom
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, data ? gl.NONE : gl.BROWSER_DEFAULT_WEBGL);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+    onLoad();
   };
   image.src = url;
 }
 
-function loadTexture(url) {
+// A 1x1 texture of one color, shown until an image loads and used for missing maps
+function solidTexture(rgba) {
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
-  setTextureImage(texture, url);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(rgba));
   return texture;
 }
 
-const brickTexture = loadTexture("brick.png");
-const normalTexture = loadTexture("texture2.jpg");
+function loadTexture(url, { data = false, placeholder = [128, 128, 255, 255] } = {}) {
+  const texture = solidTexture(placeholder);
+  setTextureImage(texture, url, data);
+  return texture;
+}
 
-// Brick texture picker: <input type="file" id="brickInput" accept="image/*"> in index.html
-document.getElementById("brickInput")?.addEventListener("change", e => {
-  const file = e.target.files[0];
-  if (file) setTextureImage(brickTexture, URL.createObjectURL(file));
+const normalTexture = loadTexture("texture2.jpg", { data: true });
+
+// A material is a set of maps: color, normal and height. Any of them can be missing;
+// DEFAULT_MAPS stand in for those.
+const DEFAULT_MAPS = {
+  color: solidTexture([255, 255, 255, 255]),
+  normal: solidTexture([128, 128, 255, 255]),
+  height: solidTexture([0, 0, 0, 255])
+};
+const LUMINANCE_DEPTH = 0.012;   // bump depth when it comes from the color map's darkness
+const HEIGHT_MAP_DEPTH = 0.15;   // bump depth for a real height map's full range
+
+function createMaterial(maps = {}) {
+  return {
+    maps,                      // textures by name: color, normal, height
+    normalStrength: 1.0,       // these two can be changed at any time
+    heightDepth: LUMINANCE_DEPTH
+  };
+}
+
+// The starting material: the brick image, with bumps from its darkness
+const brickMaterial = createMaterial({ color: loadTexture("brick.png", { placeholder: [128, 128, 128, 255] }) });
+
+// Load a texture that might not exist. Resolves to the texture, or to null if the file is missing.
+function loadOptionalTexture(url, { data = false, placeholder = [128, 128, 128, 255] } = {}) {
+  return new Promise(resolve => {
+    const texture = solidTexture(placeholder);
+    setTextureImage(texture, url, data, () => resolve(texture), () => {
+      gl.deleteTexture(texture);
+      console.warn("Couldn't load", url);
+      resolve(null);
+    });
+  });
+}
+
+// The materials the Material button goes through, in order. Each folder sits next to index.html
+// with its files named as they came from the texture site; only the color, OpenGL normal and
+// height files are used. To add one, copy an entry and change the folder and file names
+// (leave folder out for files that sit next to index.html).
+const MATERIAL_PRESETS = [
+  {
+    name: "plastic",
+    folder: "plastic_0010_1k_5m9Axh",
+    color: "plastic_0010_color_1k.jpg",
+    normal: "plastic_0010_normal_opengl_1k.png",
+    height: "plastic_0010_height_1k.png"
+  },
+  {
+    name: "orange",
+    folder: "food_0022_1k_Z1rbdX",
+    color: "food_0022_color_1k.jpg",
+    normal: "food_0022_normal_opengl_1k.png",
+    height: "food_0022_height_1k.png"
+  },
+  {
+    name: "knitted",
+    folder: "fabric_0019_1k_Z7MxvD (1)",
+    color: "fabric_0019_color_1k.jpg",
+    normal: "fabric_0019_normal_opengl_1k.png",
+    height: "fabric_0019_height_1k.png"
+  }
+];
+
+function loadPresetMaterial(preset) {
+  const m = createMaterial();
+  // encodeURIComponent turns spaces and brackets in a name into a valid URL
+  const url = file => preset.folder
+    ? `${encodeURIComponent(preset.folder)}/${encodeURIComponent(file)}`
+    : encodeURIComponent(file);
+  const maps = [
+    ["color", { placeholder: [128, 128, 128, 255] }],
+    ["normal", { data: true, placeholder: [128, 128, 255, 255] }],
+    ["height", { data: true, placeholder: [0, 0, 0, 255] }]
+  ];
+  for (const [name, options] of maps) {
+    if (!preset[name]) continue;   // the entry leaves this map out
+    loadOptionalTexture(url(preset[name]), options).then(texture => {
+      if (!texture) return;
+      m.maps[name] = texture;
+      if (name === "height") m.heightDepth = HEIGHT_MAP_DEPTH;
+    });
+  }
+  return m;
+}
+
+// All the folders load at the start, so switching is instant
+const presetMaterials = MATERIAL_PRESETS.map(preset => ({ name: preset.name, material: loadPresetMaterial(preset) }));
+
+function setMaterial(m) {
+  for (const tv of tvs) tv.material = m;
+}
+
+// Material button: <button id="materialButton">Material: brick</button> in index.html.
+// The TVs start on brick; each click moves to the next material, wrapping around.
+let presetIndex = -1;
+const materialButton = document.getElementById("materialButton");
+materialButton?.addEventListener("click", () => {
+  presetIndex = (presetIndex + 1) % presetMaterials.length;
+  setMaterial(presetMaterials[presetIndex].material);
+  materialButton.textContent = `Material: ${presetMaterials[presetIndex].name}`;
 });
 
+// Which map an image is, from its file name. Texture libraries put the map type in the name,
+// e.g. Plastic010_1K-PNG_NormalGL.png (ambientCG) or orange_peel_nor_gl_1k.png (Poly Haven).
+// The name is split into words and read from the end, so the material's own name doesn't count.
+function mapKind(fileName) {
+  const words = fileName.toLowerCase().replace(/\.[^.]*$/, "").split(/[^a-z0-9]+/);
+  for (let i = words.length - 1; i >= 0; i--) {
+    const w = words[i], next = words[i + 1];
+    // DirectX normal maps (green pointing down) are skipped; WebGL uses the OpenGL kind
+    if (["normaldx", "nordx", "nrmdx"].includes(w)) return "other";
+    if (["normal", "normals", "normalgl", "nor", "norgl", "nrm", "norm"].includes(w)) {
+      return ["dx", "directx", "direct"].includes(next) ? "other" : "normal";
+    }
+    if (["height", "heightmap", "disp", "displacement", "bump"].includes(w)) return "height";
+    if (["color", "colour", "col", "albedo", "diff", "diffuse", "basecolor"].includes(w)) return "color";
+    // Other maps in the same folders: recognized so they're skipped, not used
+    if (["rough", "roughness", "gloss", "glossiness", "ao", "ambientocclusion", "occlusion", "metal",
+         "metalness", "metallic", "specular", "opacity", "emission", "emissive", "arm"].includes(w)) return "other";
+  }
+  return null;
+}
+
+// Replace a material's maps with images from a list of files: a whole folder, several picked
+// files, or a single image (an unlabeled single image is used as the color map).
+// Returns false if none of the files is a map it recognizes.
+function loadMaterialFiles(material, fileList) {
+  const images = [...fileList].filter(f => /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name));
+  const found = {};
+  for (const file of images) {
+    const kind = mapKind(file.name);
+    if (kind && !found[kind]) found[kind] = file;
+  }
+  if (images.length === 1 && !mapKind(images[0].name)) found.color = images[0];
+
+  const normalFile = found.normal;
+  if (!found.color && !normalFile && !found.height) {
+    console.warn("No texture maps recognized in:", images.map(f => f.name));
+    return false;
+  }
+
+  for (const texture of Object.values(material.maps)) gl.deleteTexture(texture);
+  const load = (file, options) => loadTexture(URL.createObjectURL(file), options);
+  const maps = {};
+  if (found.color) maps.color = load(found.color, { placeholder: [128, 128, 128, 255] });
+  if (normalFile) maps.normal = load(normalFile, { data: true });
+  if (found.height) maps.height = load(found.height, { data: true, placeholder: [0, 0, 0, 255] });
+
+  material.maps = maps;
+  material.heightDepth = found.height ? HEIGHT_MAP_DEPTH : LUMINANCE_DEPTH;
+  console.log("Material maps:", { color: found.color?.name, normal: normalFile?.name, height: found.height?.name });
+  return true;
+}
+
+// Material pickers in index.html, for trying maps from your computer:
+//   <input type="file" id="materialInput" webkitdirectory>             a folder of maps
+//   <input type="file" id="brickInput" accept="image/*" multiple>      one image, or several maps
+const customMaterial = createMaterial();
+for (const id of ["materialInput", "brickInput"]) {
+  document.getElementById(id)?.addEventListener("change", e => {
+    if (!loadMaterialFiles(customMaterial, e.target.files)) return;
+    setMaterial(customMaterial);
+    if (materialButton) materialButton.textContent = "Material: custom";
+  });
+}
+
+// Bind a material's maps to their texture units and set its uniforms
+function bindMaterial(m) {
+  for (const [name, unit] of Object.entries(MAP_UNITS)) {
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, m.maps[name] || DEFAULT_MAPS[name]);
+  }
+  gl.activeTexture(gl.TEXTURE0);
+  gl.uniform1i(uMaterial.uHasNormal, m.maps.normal ? 1 : 0);
+  gl.uniform1i(uMaterial.uHasHeight, m.maps.height ? 1 : 0);
+  gl.uniform1f(uMaterial.uNormalStrength, m.normalStrength);
+  gl.uniform1f(uMaterial.uHeightDepth, m.heightDepth);
+}
+
+// url can be a file next to index.html or a direct link to a video file on another site.
+// Another site has to allow cross-origin use (CORS), or WebGL isn't allowed to read its pixels.
 function loadVideoTexture(url) {
   const video = document.createElement("video");
+  video.crossOrigin = "anonymous";   // ask for CORS permission; must be set before src
+  video.addEventListener("error", () =>
+    console.error(`Couldn't load video ${url}: check the link, and that the site allows cross-origin use (CORS)`));
   video.src = url;
   video.muted = true;        // browsers only autoplay muted video
   video.loop = true;
@@ -290,11 +511,19 @@ function loadVideoTexture(url) {
 }
 
 // Copy the video's current frame into its texture; called once per render
-function updateVideoTexture({ texture, video }) {
-  if (video.readyState < video.HAVE_CURRENT_DATA) return;
-  gl.bindTexture(gl.TEXTURE_2D, texture);
+function updateVideoTexture(v) {
+  if (v.blocked || v.video.readyState < v.video.HAVE_CURRENT_DATA) return;
+  gl.bindTexture(gl.TEXTURE_2D, v.texture);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.BROWSER_DEFAULT_WEBGL);
+  try {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v.video);
+  } catch (e) {
+    // WebGL refuses video from another site that doesn't allow it. Stop trying, so the
+    // error doesn't end the render loop; the screens stay black and the rest still draws.
+    v.blocked = true;
+    console.error("Can't use this video as a texture (the site doesn't allow cross-origin use):", e.message);
+  }
 }
 
 const tvVideo = loadVideoTexture("video.mp4");   // shared by every TV
@@ -335,7 +564,7 @@ class TV {
     this.aspect = aspect;
     this.border = border;            // width of the border strips, relative to size
     this.depth = depth;              // how far the inner walls run back, relative to size
-    this.texture = brickTexture;     // body texture; reassign at any time
+    this.material = brickMaterial;   // body material; reassign at any time
     this.videoCrop = [0, 0, 1, 1];   // part of the video frame shown: u0, v0, u1, v1 (set by layoutVideoWall)
     this.build();
   }
@@ -389,7 +618,7 @@ class TV {
     const space = translate(...this.position);
     gl.uniformMatrix4fv(uParentView, false, multiply(view, space));
 
-    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    bindMaterial(this.material);
     for (const { mesh, local } of this.parts) drawMesh(mesh, TRIPLANAR, local);
 
     gl.bindTexture(gl.TEXTURE_2D, tvVideo.texture);
