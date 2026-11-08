@@ -273,6 +273,7 @@ function scaleMatrix(sx, sy, sz) {
 
 const openCubeMesh = createMesh(createOpenCube());
 const planeMesh = createMesh(createPlane());
+const clouds = createClouds(gl, planeMesh);   // clouds.js: the sky behind the scene
 const cylinderMesh = createMesh(createCylinder());
 
 // makeSphere (models.js) gives positions, colors, UVs and indices. createMesh also needs normals
@@ -471,7 +472,7 @@ const noiseProgram = createProgram(NOISE_VERTEX_SHADER, NOISE_FRAGMENT_SHADER);
 const uNoiseSeed = gl.getUniformLocation(noiseProgram, "uSeed");
 const uNoiseColor = gl.getUniformLocation(noiseProgram, "uColor");
 let noiseFrame = 0;      // the seed: counts frames, so every frame gets new snow
-let colorSnow = Math.random() < 0.5;   // gray or colored, picked at random on each page load
+let colorSnow = false;   // gray or colored; the channel button picks it at random each time ch 2 comes on
 
 // Render a new frame of snow into noiseTexture, then point drawing back at the canvas.
 // The viewport has to match whatever is being drawn into, each time it changes.
@@ -655,6 +656,7 @@ function screenSource() {
 const channelButton = document.getElementById("channelButton");
 channelButton?.addEventListener("click", () => {
   channel = (channel + 1) % 3;
+  if (channel === 1) colorSnow = Math.random() < 0.5;   // gray or colored, picked each time ch 2 comes on
   if (channel === 2 && testPatterns.length) {
     // A random test pattern, a different one from last time when there's more than one
     const others = testPatterns.filter(p => p !== testPattern);
@@ -929,6 +931,8 @@ function render(time) {
 
   renderNoise();   // first, into the noise texture; then everything below draws to the canvas
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  clouds.draw(t);           // the sky, behind everything
+  gl.useProgram(program);   // back to the scene program
 
   // Camera: rotate the whole world about its origin, then move it in front of the camera.
   // Every object and the light go through the same view, so they all turn together.
