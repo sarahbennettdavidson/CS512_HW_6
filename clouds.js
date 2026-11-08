@@ -27,8 +27,8 @@ const float cloudlight = 0.3;
 const float cloudcover = 0.2;
 const float cloudalpha = 8.0;
 const float skytint = 0.5;
-const vec3 skycolour1 = vec3(0.2, 0.4, 0.6);
-const vec3 skycolour2 = vec3(0.4, 0.7, 1.0);
+const vec3 skycolour1 = vec3(0.2+(Math.random()*0.1), 0.4+(Math.random()*0.1), 0.6+(Math.random()*0.1));//adding some tint to ssky
+const vec3 skycolour2 = vec3(0.4+(Math.random()*0.1), 0.7+(Math.random()*0.1), 1.0);
 
 const mat2 m = mat2( 1.6,  1.2, -1.2,  1.6 );
 
